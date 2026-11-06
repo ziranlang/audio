@@ -1,0 +1,26 @@
+Types :: #import "audio/types"
+Opus :: #import "audio/opus"
+Pipeline :: #import "audio/pipeline"
+Ogg :: #import "audio/ogg"
+#import "std/vec"
+#import "std/file"
+#program_export
+main :: () -> s32 {
+    pcm: Types.PCM
+    pcm.rate = 44100; pcm.channels = 1
+    if !VecResize(pcm.samples, 4410) { return 1 }
+    bytes: Vec(u8)
+    options := Types.DefaultOptions()
+    options.bandwidth = Types.Bandwidth.Wide
+    if Pipeline.Encode(*pcm, options, *bytes) != Types.OK { return 2 }
+    info: Types.Info
+    if Ogg.Inspect(VecSlice(bytes, 0, bytes.count), *info) != Types.OK || info.frames != 4800 { return 3 }
+    decoded: Types.PCM
+    if Opus.Decode(VecSlice(bytes, 0, bytes.count), 4800, *decoded) != Types.OK || decoded.samples.count != 4800 { return 4 }
+    file := OpenReplace("fixture.opus")
+    if !file.valid { return 5 }
+    written := Write(file, VecSlice(bytes, 0, bytes.count))
+    if !CloseFile(file) || written != bytes.count { return 6 }
+    print("manifest consumer audio exports and native links passed\n")
+    return 0
+}

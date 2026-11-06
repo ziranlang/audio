@@ -1,0 +1,33 @@
+{
+  "format": 1,
+  "packages": [
+    {
+      "commit": "c96f5e3de9c4488f4e6c97f59f5245f22fda22f7",
+      "dependencies": {},
+      "id": "p0dd67588478f9a3e",
+      "name": "libsamplerate",
+      "ref": "c96f5e3de9c4488f4e6c97f59f5245f22fda22f7",
+      "source": true,
+      "url": "https://github.com/libsndfile/libsamplerate.git"
+    },
+    {
+      "commit": "ddbe48383984d56acd9e1ab6a090c54ca6b735a6",
+      "dependencies": {},
+      "id": "pe1fe9bbe80bf1d6d",
+      "name": "libopus",
+      "ref": "ddbe48383984d56acd9e1ab6a090c54ca6b735a6",
+      "source": true,
+      "url": "https://github.com/xiph/opus.git"
+    }
+  ],
+  "root": {
+    "dependencies": {"libopus": "pe1fe9bbe80bf1d6d", "libsamplerate": "p0dd67588478f9a3e"},
+    "dependency_refs": {"libopus": "ddbe48383984d56acd9e1ab6a090c54ca6b735a6", "libsamplerate": "c96f5e3de9c4488f4e6c97f59f5245f22fda22f7"},
+    "name": "audio"
+  },
+  "toolchain": {
+    "commit": "897a37b0afa826362a62dae8072b71f502d91f7b",
+    "ref": "master",
+    "url": "https://github.com/ziranlang/ziran.git"
+  }
+}

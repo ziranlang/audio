@@ -1,0 +1,78 @@
+#import "types"
+#import "std/vec"
+#scope_file
+samplerate :: #system_library "samplerate";
+New :: (quality: s32, channels: s32, error: *s32) -> *void #foreign samplerate "src_new";
+Delete :: (state: *void) -> *void #foreign samplerate "src_delete";
+Process :: (state: *void, data: *SincData) -> s32 #foreign samplerate "src_process";
+#scope_export
+// Public libsamplerate SRC_DATA ABI: C long maps to isize on supported Unix
+// C targets. Windows is rejected before creating or processing native state.
+SincData :: struct {
+    input: *float32; output: *float32
+    input_frames: isize; output_frames: isize
+    input_used: isize; output_generated: isize
+    end_of_input: s32; ratio: float64
+}
+SincState :: struct { handle: *void; channels: s32; ratio: float64; ended: bool; }
+SincOpen :: (state: *SincState, channels: s32, from_rate: s32, to_rate: s32) -> s32 {
+    #if #defined(_WIN32) {
+        return Unsupported
+    }
+    if state.handle != null || channels < 1 || channels > 2 || from_rate < 8000 || from_rate > 192000 || to_rate < 8000 || to_rate > 192000 { return Invalid }
+    error: s32
+    handle := New(0, channels, *error) // SRC_SINC_BEST_QUALITY
+    if handle == null || error != 0 { return NativeFailure }
+    state.handle = handle; state.channels = channels; state.ratio = cast(float64)to_rate / cast(float64)from_rate; state.ended = false
+    return OK
+}
+SincClose :: (state: *SincState) {
+    if state.handle != null { unused Delete(state.handle) }
+    <<state = SincState.{}
+}
+// Caller supplies disjoint buffers. Respect both used and generated counts;
+// keep feeding the unconsumed input, and drain with final=true until generated=0.
+SincProcess :: (state: *SincState, input: []float32, output: []float32, final: bool, used: *s64, generated: *s64) -> s32 {
+    <<used = 0; <<generated = 0
+    #if #defined(_WIN32) {
+        return Unsupported
+    }
+    if state.handle == null || state.ended || input.count % state.channels != 0 || output.count == 0 || output.count % state.channels != 0 { return Invalid }
+    if input.count > MaxFrames * state.channels || output.count > MaxFrames * state.channels { return LimitExceeded }
+    for value: input { if value != value || value < -16.0 || value > 16.0 { return Invalid } }
+    data := SincData.{.input = ifx input.count == 0 then null else *input[0], .output = *output[0],
+        .input_frames = cast(isize)(input.count / state.channels), .output_frames = cast(isize)(output.count / state.channels),
+        .end_of_input = ifx final then 1 else 0, .ratio = state.ratio}
+    if Process(state.handle, *data) != 0 { return NativeFailure }
+    <<used = cast(s64)data.input_used; <<generated = cast(s64)data.output_generated
+    if final && data.input_used == data.input_frames && data.output_generated == 0 { state.ended = true }
+    return OK
+}
+Resample :: (pcm: *PCM, target_rate: s32, output: *PCM) -> s32 {
+    if pcm == output || !ValidPCM(pcm) || target_rate < 8000 || target_rate > 192000 { return Invalid }
+    frames := pcm.samples.count / pcm.channels
+    expected := (frames * target_rate + pcm.rate / 2) / pcm.rate
+    if expected == 0 || expected > MaxFrames { return LimitExceeded }
+    result: PCM
+    result.channels = pcm.channels; result.rate = target_rate
+    if !VecResize(result.samples, (expected + 1) * pcm.channels) { return AllocationFailed }
+    state: SincState
+    code := SincOpen(*state, pcm.channels, pcm.rate, target_rate)
+    if code != OK { return code }
+    defer { SincClose(*state) }
+    used: s64; made: s64
+    input_samples: Vec(float32)
+    SwapSamples(pcm, *input_samples)
+    output_samples: Vec(float32)
+    SwapSamples(*result, *output_samples)
+    code = SincProcess(*state, VecSlice(input_samples, 0, input_samples.count), VecSlice(output_samples, 0, output_samples.count), true, *used, *made)
+    SwapSamples(pcm, *input_samples)
+    SwapSamples(*result, *output_samples)
+    if code != OK { return code }
+    if used != frames || made < expected - 1 || made > expected + 1 { return NativeFailure }
+    unused VecResize(result.samples, made * pcm.channels)
+    output.rate = result.rate; output.channels = result.channels
+    SwapSamples(*result, *output_samples)
+    SwapSamples(output, *output_samples)
+    return OK
+}

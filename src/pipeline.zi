@@ -1,0 +1,72 @@
+// Whole-buffer preprocessing and Ogg Opus encoding. Codec-only consumers
+// import opus without pulling in the sample-rate converter.
+#import "types"
+#import "std/vec"
+#import "ogg"
+#import "opus"
+#import "resample"
+
+Encode :: (pcm: *PCM, options: Options, output: *Vec(u8)) -> s32 {
+    if !ValidPCM(pcm) { return Invalid }
+    prepared: PCM
+    source := pcm
+    if pcm.rate != 48000 {
+        code := Resample(pcm, 48000, *prepared)
+        if code != OK { return code }
+        source = *prepared
+    }
+    encoder: Encoder
+    code := EncoderOpen(*encoder, source.channels, options)
+    if code != OK { return code }
+    defer { EncoderClose(*encoder) }
+    bytes: Vec(u8)
+    header: [19]u8
+    text := "OpusHead"
+    for i: 0..7 { header[i] = text[i] }
+    header[8] = 1; header[9] = cast(u8)source.channels
+    PutLittle(header[:], 10, 2, cast(u64)encoder.lookahead)
+    PutLittle(header[:], 12, 4, cast(u64)pcm.rate)
+    code = AppendPage(*bytes, header[:], 2, 0, 1, 0)
+    if code != OK { return code }
+    tags: [21]u8
+    text = "OpusTags"
+    for i: 0..7 { tags[i] = text[i] }
+    PutLittle(tags[:], 8, 4, 5)
+    text = "Ziran"
+    for i: 0..4 { tags[12 + i] = text[i] }
+    code = AppendPage(*bytes, tags[:], 0, 0, 1, 1)
+    if code != OK { return code }
+    frames := source.samples.count / source.channels
+    total := frames + encoder.lookahead
+    at: s64
+    sequence: u32 = 2
+    packet: [4096]u8
+    block: [5760]float32
+    page: PageBuilder
+    page_frames: s64
+    block_samples := cast(s64)encoder.frame_size * source.channels
+    while at < total {
+        for i: cast(s64)0..block_samples - 1 {
+            index := at * source.channels + i
+            block[i] = ifx index < source.samples.count then source.samples[index] else cast(float32)0.0
+        }
+        written: s32
+        code = EncoderPacket(*encoder, block[0:cast(s64)encoder.frame_size * source.channels], packet[:], *written)
+        if code != OK { return code }
+        needed := cast(s64)written / 255 + 1
+        if page.segments + needed > 255 || page.count + written > 65025 {
+            code = PageFlush(*page, *bytes, false, at, sequence)
+            if code != OK { return code }; sequence += 1; page_frames = 0
+        }
+        code = PageAdd(*page, packet[0:written])
+        if code != OK { return code }
+        at += encoder.frame_size; page_frames += encoder.frame_size
+        final := at >= total
+        if final || page_frames >= 9600 {
+            code = PageFlush(*page, *bytes, final, ifx final then total else at, sequence)
+            if code != OK { return code }; sequence += 1; page_frames = 0
+        }
+    }
+    VecSwap(bytes, <<output)
+    return OK
+}

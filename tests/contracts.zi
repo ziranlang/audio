@@ -1,0 +1,139 @@
+#import "types"
+#import "std/vec"
+#import "opus"
+#import "pipeline"
+#import "ogg"
+#import "resample"
+#import "wav"
+#import "std/math"
+
+test_opus :: #system_library "opus";
+TestControl :: (state: *void, request: s32, arguments: ..any) -> s32 #foreign test_opus "opus_encoder_ctl";
+
+#program_export
+main :: () -> s32 {
+    pcm: PCM
+    pcm.rate = 44100; pcm.channels = 2
+    if !VecResize(pcm.samples, 4411 * 2) { return 1 }
+    for i: 0..4410 {
+        pcm.samples[i * 2] = cast(float32)(0.4 * Sin(cast(float64)i * 2.0 * 3.14159265358979323846 * 1000.0 / 44100.0))
+        pcm.samples[i * 2 + 1] = cast(float32)(0.2 * Cos(cast(float64)i * 2.0 * 3.14159265358979323846 * 700.0 / 44100.0))
+    }
+    resampled: PCM
+    if Resample(*pcm, 48000, *resampled) != OK || pcm.samples.count != 8822 { return 2 }
+    options := DefaultOptions()
+    options.bitrate = 48000; options.constrained_vbr = true; options.bandwidth = .Wide
+    for mode: 0..2 {
+        settings := DefaultOptions()
+        settings.bitrate = 24000; settings.vbr = mode != 0; settings.constrained_vbr = mode == 2
+        settings.bandwidth = .Wide; settings.complexity = 7
+        encoder: Encoder
+        if EncoderOpen(*encoder, 2, settings) != OK { return 32 }
+        vbr: s32; constrained: s32; bandwidth: s32; complexity: s32; bitrate: s32
+        if TestControl(encoder.handle, 4007, *vbr) != 0 || TestControl(encoder.handle, 4021, *constrained) != 0 ||
+            TestControl(encoder.handle, 4005, *bandwidth) != 0 || TestControl(encoder.handle, 4011, *complexity) != 0 ||
+            TestControl(encoder.handle, 4003, *bitrate) != 0 { EncoderClose(*encoder); return 33 }
+        EncoderClose(*encoder)
+        if vbr != cast(s32)settings.vbr || constrained != cast(s32)settings.constrained_vbr || bandwidth != 1103 || complexity != 7 || bitrate != 24000 { return 34 }
+    }
+    bytes: Vec(u8)
+    if Encode(*pcm, options, *bytes) != OK { return 3 }
+    info: Info
+    if Inspect(VecSlice(bytes, 0, bytes.count), *info) != OK || info.channels != 2 || info.frames != resampled.samples.count / 2 || info.original_rate != 44100 { return 4 }
+    decoded: PCM
+    if Decode(VecSlice(bytes, 0, bytes.count), info.frames - 1, *decoded) != LimitExceeded || decoded.samples.count != 0 { return 5 }
+    if Decode(VecSlice(bytes, 0, bytes.count), info.frames, *decoded) != OK { return 6 }
+    decoder: Decoder
+    if DecoderOpen(*decoder, VecSlice(bytes, 0, bytes.count), info.frames) != OK { return 7 }
+    scratch: [74]float32
+    at: s64
+    while true {
+        frames: s64
+        if DecoderRead(*decoder, scratch[:], *frames) != OK { DecoderClose(*decoder); return 8 }
+        if frames == 0 { break }
+        for i: cast(s64)0..frames * 2 - 1 { if scratch[i] != decoded.samples[at * 2 + i] { DecoderClose(*decoder); return 9 } }
+        at += frames
+    }
+    if DecoderRewind(*decoder) != OK { DecoderClose(*decoder); return 28 }
+    rewound: s64
+    if DecoderRead(*decoder, scratch[:], *rewound) != OK || rewound != 37 { DecoderClose(*decoder); return 29 }
+    for i: 0..73 { if scratch[i] != decoded.samples[i] { DecoderClose(*decoder); return 30 } }
+    DecoderClose(*decoder); DecoderClose(*decoder)
+    if at != info.frames { return 10 }
+    if DecoderOpen(*decoder, VecSlice(bytes, 0, bytes.count), info.frames) != OK { return 11 }
+    DecoderClose(*decoder)
+    old_count := bytes.count
+    options.bitrate = 1
+    if Encode(*pcm, options, *bytes) != Invalid || bytes.count != old_count { return 12 }
+    wav: Vec(u8)
+    if WavEncode(*pcm, *wav) != OK { return 13 }
+    roundtrip: PCM
+    if WavDecode(VecSlice(wav, 0, wav.count), 4411, *roundtrip) != OK || roundtrip.rate != 44100 || roundtrip.samples.count != pcm.samples.count { return 14 }
+    // A valid container carrying an invalid VBR packet must fail after
+    // native decoder allocation without replacing the caller's prior PCM.
+    bad: Vec(u8)
+    header: [19]u8
+    text := "OpusHead"
+    for i: 0..7 { header[i] = text[i] }
+    header[8] = 1; header[9] = 1
+    if AppendPage(*bad, header[:], 2, 0, 1, 0) != OK { return 35 }
+    tags: [16]u8
+    text = "OpusTags"
+    for i: 0..7 { tags[i] = text[i] }
+    if AppendPage(*bad, tags[:], 0, 0, 1, 1) != OK { return 36 }
+    invalid_packet: [2]u8 = .[2, 255]
+    if AppendPage(*bad, invalid_packet[:], 4, 500, 1, 2) != OK { return 37 }
+    old_samples := decoded.samples.count
+    old_first := decoded.samples[0]
+    if Decode(VecSlice(bad, 0, bad.count), 1000, *decoded) != Malformed || decoded.samples.count != old_samples || decoded.samples[0] != old_first { return 38 }
+    // A unit step can overshoot after a sinc filter. Keep this headroom and
+    // permit the next encode; integer WAV clips explicitly instead.
+    step: PCM
+    step.rate = 44100; step.channels = 1
+    if !VecResize(step.samples, 4410) { return 15 }
+    for i: 2205..4409 { step.samples[i] = 1.0 }
+    overshoot: PCM
+    if Resample(*step, 48000, *overshoot) != OK { return 16 }
+    high: float32
+    for i: 0..overshoot.samples.count - 1 { if overshoot.samples[i] > high { high = overshoot.samples[i] } }
+    if high <= 1.0 || !ValidPCM(*overshoot) { return 17 }
+    if Encode(*overshoot, DefaultOptions(), *bytes) != OK { return 18 }
+    // Strong anti-alias rejection: 18kHz at48k ->16k must not fold to2k.
+    tone: PCM
+    tone.rate = 48000; tone.channels = 1
+    if !VecResize(tone.samples, 48000) { return 19 }
+    for i: 0..47999 { tone.samples[i] = cast(float32)(0.5 * Sin(cast(float64)i * 2.0 * 3.14159265358979323846 * 18000.0 / 48000.0)) }
+    filtered: PCM
+    if Resample(*tone, 16000, *filtered) != OK { return 20 }
+    energy: float64
+    for i: 1000..14999 { energy += cast(float64)filtered.samples[i] * cast(float64)filtered.samples[i] }
+    if energy / 14000.0 > 0.00000001 { print("alias energy %\n", energy); return 21 }
+    saved_first := filtered.samples[0]
+    filtered.samples[0] = cast(float32)Infinity()
+    if WavEncode(*filtered, *wav) != Invalid { return 31 }
+    filtered.samples[0] = saved_first
+    // Streaming sinc matches a complete conversion across irregular chunks.
+    state: SincState
+    if SincOpen(*state, 1, 48000, 16000) != OK { return 22 }
+    input_samples: Vec(float32)
+    SwapSamples(*tone, *input_samples)
+    stream: Vec(float32)
+    output_block: [379]float32
+    consumed: s64
+    while true {
+        end := consumed + 317
+        if end > input_samples.count { end = input_samples.count }
+        used: s64; generated: s64
+        code := SincProcess(*state, VecSlice(input_samples, consumed, end), output_block[:], end == input_samples.count, *used, *generated)
+        if code != OK { SincClose(*state); return 23 }
+        for i: cast(s64)0..generated - 1 { if !VecPush(stream, output_block[i]) { SincClose(*state); return 24 } }
+        consumed += used
+        if state.ended { break }
+        if used == 0 && generated == 0 && end != input_samples.count { SincClose(*state); return 25 }
+    }
+    SincClose(*state); SincClose(*state)
+    if stream.count != filtered.samples.count { print("stream length % expected %\n", stream.count, filtered.samples.count); return 26 }
+    for i: 0..stream.count - 1 { if (cast(float64)stream[i] - cast(float64)filtered.samples[i]) > 0.000001 || (cast(float64)filtered.samples[i] - cast(float64)stream[i]) > 0.000001 { return 27 } }
+    print("native audio contracts passed; % logical frames, alias mean square %\n", info.frames, energy / 14000.0)
+    return 0
+}

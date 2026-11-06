@@ -1,0 +1,15 @@
+Types :: #import "audio/types"
+Opus :: #import "audio/opus"
+#import "std/vec"
+#import "std/file"
+#import "std/byte_text_linux"
+#program_export
+main :: (argc: s32, argv: **u8) -> s32 {
+    if argc != 2 { return 1 }
+    bytes: Vec(u8)
+    if !ReadFileInto(TextFromCString(argv[1]), *bytes) { return 2 }
+    pcm: Types.PCM
+    if Opus.Decode(VecSlice(bytes, 0, bytes.count), 4800, *pcm) != Types.OK || pcm.samples.count != 4800 { return 3 }
+    print("decoder-only manifest consumer without samplerate passed\n")
+    return 0
+}

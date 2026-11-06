@@ -1,0 +1,159 @@
+#import "types"
+#import "std/vec"
+#import "ogg"
+#import "std/math"
+#scope_file
+opus :: #system_library "opus";
+EncoderCreate :: (rate: s32, channels: s32, application: s32, error: *s32) -> *void #foreign opus "opus_encoder_create";
+EncoderDestroy :: (state: *void) #foreign opus "opus_encoder_destroy";
+EncoderControl :: (state: *void, request: s32, values: ..any) -> s32 #foreign opus "opus_encoder_ctl";
+EncodeFloat :: (state: *void, pcm: *float32, frames: s32, packet: *u8, capacity: s32) -> s32 #foreign opus "opus_encode_float";
+DecoderCreate :: (rate: s32, channels: s32, error: *s32) -> *void #foreign opus "opus_decoder_create";
+DecoderDestroy :: (state: *void) #foreign opus "opus_decoder_destroy";
+DecoderControl :: (state: *void, request: s32, values: ..any) -> s32 #foreign opus "opus_decoder_ctl";
+DecodeFloat :: (state: *void, packet: *u8, size: s32, output: *float32, capacity: s32, fec: s32) -> s32 #foreign opus "opus_decode_float";
+#scope_export
+Encoder :: struct { handle: *void; channels: s32; frame_size: s32; lookahead: s32; }
+EncoderClose :: (encoder: *Encoder) {
+    if encoder.handle != null { EncoderDestroy(encoder.handle) }
+    <<encoder = Encoder.{}
+}
+EncoderOpen :: (encoder: *Encoder, channels: s32, options: Options) -> s32 {
+    if encoder.handle != null || channels < 1 || channels > 2 || options.bitrate < 6000 || options.bitrate > 510000 || options.complexity < 0 || options.complexity > 10 { return Invalid }
+    if options.frame_ms != 5 && options.frame_ms != 10 && options.frame_ms != 20 && options.frame_ms != 40 && options.frame_ms != 60 { return Invalid }
+    if cast(s32)options.bandwidth < 0 || cast(s32)options.bandwidth > 4 || cast(s32)options.application < 0 || cast(s32)options.application > 2 { return Invalid }
+    application: s32 = 2049
+    if options.application == .Voice { application = 2048 }
+    if options.application == .LowDelay { application = 2051 }
+    error: s32
+    handle := EncoderCreate(48000, channels, application, *error)
+    if handle == null || error != 0 { return NativeFailure }
+    encoder.handle = handle; encoder.channels = channels; encoder.frame_size = options.frame_ms * 48
+    if EncoderControl(handle, 4002, options.bitrate) != 0 ||
+        EncoderControl(handle, 4006, cast(s32)options.vbr) != 0 ||
+        EncoderControl(handle, 4020, cast(s32)options.constrained_vbr) != 0 ||
+        EncoderControl(handle, 4010, options.complexity) != 0 { EncoderClose(encoder); return NativeFailure }
+    if options.bandwidth != .Auto {
+        bandwidth: s32 = 1101
+        if options.bandwidth == .Wide { bandwidth = 1103 }
+        if options.bandwidth == .Superwide { bandwidth = 1104 }
+        if options.bandwidth == .Full { bandwidth = 1105 }
+        if EncoderControl(handle, 4004, bandwidth) != 0 { EncoderClose(encoder); return NativeFailure }
+    }
+    if EncoderControl(handle, 4027, *encoder.lookahead) != 0 { EncoderClose(encoder); return NativeFailure }
+    return OK
+}
+// Exactly one configured frame (48 kHz interleaved float). Caller retains
+// buffers. Native encoder state must be closed once by its owning caller.
+EncoderPacket :: (encoder: *Encoder, pcm: []float32, packet: []u8, written: *s32) -> s32 {
+    <<written = 0
+    if encoder.handle == null || pcm.count != cast(s64)encoder.frame_size * encoder.channels || packet.count < 1276 || packet.count > 65536 { return Invalid }
+    for value: pcm { if value != value || value < -16.0 || value > 16.0 { return Invalid } }
+    size := EncodeFloat(encoder.handle, *pcm[0], encoder.frame_size, *packet[0], cast(s32)packet.count)
+    if size < 0 { return NativeFailure }
+    <<written = size
+    return OK
+}
+// Incremental Ogg decoder: bounded 120 ms scratch, no full PCM allocation.
+// The input byte view is borrowed until DecoderClose. This is single-owner,
+// single-thread state; callers must never copy a live decoder or encoder.
+Decoder :: struct {
+    handle: *void
+    reader: OggReader
+    info: Info
+    scratch: [11520]float32
+    pending_at: s64
+    pending_end: s64
+    decoded: s64
+    emitted: s64
+    gain: float64
+    start_at: s64
+    start_sequence: u64
+}
+DecoderClose :: (decoder: *Decoder) {
+    if decoder.handle != null { DecoderDestroy(decoder.handle) }
+    decoder.handle = null
+    decoder.reader.packet_count = 0
+    empty: []u8
+    decoder.reader.input = empty
+    decoder.pending_at = 0; decoder.pending_end = 0
+}
+DecoderOpen :: (decoder: *Decoder, input: []u8, max_frames: s64) -> s32 {
+    if decoder.handle != null || max_frames <= 0 || max_frames > cast(s64)48000 * 86400 { return Invalid }
+    metadata: Info
+    code := Inspect(input, *metadata)
+    if code != OK { return code }
+    if metadata.frames > max_frames { return LimitExceeded }
+    error: s32
+    handle := DecoderCreate(48000, metadata.channels, *error)
+    if handle == null || error != 0 { return NativeFailure }
+    decoder.handle = handle; decoder.info = metadata
+    decoder.reader.input = input; decoder.reader.at = 0; decoder.reader.end = 0
+    decoder.reader.segment = 0; decoder.reader.segments = 0; decoder.reader.sequence = 0; decoder.reader.done = false
+    decoder.decoded = 0; decoder.emitted = 0; decoder.pending_at = 0; decoder.pending_end = 0
+    decoder.gain = Pow(10.0, cast(float64)metadata.gain_q8 / 5120.0)
+    code = NextPacket(*decoder.reader)
+    if code == OK { code = NextPacket(*decoder.reader) }
+    if code != OK { DecoderClose(decoder) }
+    decoder.start_at = decoder.reader.at; decoder.start_sequence = decoder.reader.sequence
+    return code
+}
+// Rewind already validated, immutable borrowed input without rescanning it.
+// Only the owning caller may mutate state; input must stay unchanged until close.
+DecoderRewind :: (decoder: *Decoder) -> s32 {
+    if decoder.handle == null { return Invalid }
+    if DecoderControl(decoder.handle, 4028) != 0 { return NativeFailure }
+    decoder.reader.at = decoder.start_at; decoder.reader.end = decoder.start_at
+    decoder.reader.segment = 0; decoder.reader.segments = 0
+    decoder.reader.sequence = decoder.start_sequence; decoder.reader.done = false
+    decoder.reader.packet_count = 0
+    decoder.pending_at = 0; decoder.pending_end = 0
+    decoder.decoded = 0; decoder.emitted = 0
+    return OK
+}
+// Returns OK and frames=0 only at exact logical EOF. Output is caller-owned,
+// interleaved and may be as small as one frame; the unused suffix is unchanged.
+DecoderRead :: (decoder: *Decoder, output: []float32, frames: *s64) -> s32 {
+    <<frames = 0
+    if decoder.handle == null || output.count <= 0 || output.count % decoder.info.channels != 0 { return Invalid }
+    channels := cast(s64)decoder.info.channels
+    capacity := output.count / channels
+    while <<frames < capacity && decoder.emitted < decoder.info.frames {
+        if decoder.pending_at == decoder.pending_end {
+            code := NextPacket(*decoder.reader)
+            if code != OK { return code }
+            if decoder.reader.done { return Malformed }
+            packet := decoder.reader.packet[0:decoder.reader.packet_count]
+            count := DecodeFloat(decoder.handle, *packet[0], cast(s32)packet.count, *decoder.scratch[0], 5760, 0)
+            if count <= 0 || count != PacketFrames(packet) { return Malformed }
+            skip := cast(s64)decoder.info.pre_skip - decoder.decoded
+            if skip < 0 { skip = 0 }; if skip > count { skip = count }
+            decoder.decoded += count
+            decoder.pending_at = skip; decoder.pending_end = count
+        }
+        count := decoder.pending_end - decoder.pending_at
+        if count > capacity - <<frames { count = capacity - <<frames }
+        if count > decoder.info.frames - decoder.emitted { count = decoder.info.frames - decoder.emitted }
+        for i: cast(s64)0..count * channels - 1 {
+            output[<<frames * channels + i] = cast(float32)(cast(float64)decoder.scratch[decoder.pending_at * channels + i] * decoder.gain)
+        }
+        decoder.pending_at += count; decoder.emitted += count; <<frames += count
+    }
+    return OK
+}
+Decode :: (input: []u8, max_frames: s64, output: *PCM) -> s32 {
+    decoder: Decoder
+    code := DecoderOpen(*decoder, input, max_frames)
+    if code != OK { return code }
+    defer { DecoderClose(*decoder) }
+    samples: Vec(float32)
+    count := decoder.info.frames * decoder.info.channels
+    if !VecResize(samples, count) { return AllocationFailed }
+    frames: s64
+    code = DecoderRead(*decoder, VecSlice(samples, 0, count), *frames)
+    if code != OK { return code }
+    if frames != decoder.info.frames { return Malformed }
+    output.rate = 48000; output.channels = decoder.info.channels
+    SwapSamples(output, *samples)
+    return OK
+}

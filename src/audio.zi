@@ -1,0 +1,117 @@
+#import "types"
+#import "std/vec"
+#import "opus"
+#import "pipeline"
+#import "ogg"
+#import "wav"
+#import "resample"
+#import "std/file"
+#import "std/byte_text_linux"
+#import "std/file_tree_linux"
+#import "std/mapped_file_linux"
+#import "std/text_tools"
+
+Help :: () {
+    print("audio inspect INPUT.opus\n")
+    print("audio encode INPUT.wav OUTPUT.opus [options]\n")
+    print("audio decode INPUT.opus OUTPUT.wav\n")
+    print("audio transcode INPUT.wav|INPUT.opus OUTPUT.opus [options]\n")
+    print("audio resample INPUT.wav|INPUT.opus OUTPUT.wav --rate HZ\n")
+    print("options: --bitrate 6000..510000 --vbr on|off|constrained\n")
+    print("         --bandwidth auto|narrow|wide|superwide|full\n")
+    print("         --application audio|voice|lowdelay --complexity 0..10\n")
+    print("         --frame-ms 5|10|20|40|60\n")
+    print("Native C: libopus and libsamplerate best sinc. Whole-file input cap 256 MiB; PCM cap 10 min at 48 kHz.\n")
+}
+// Stage beside the destination; failures leave an existing destination intact.
+// A pre-existing .audio-part file causes an explicit error, never deletion.
+Save :: (path: string, bytes: []u8) -> s32 {
+    parts: [2]string = .[path, ".audio-part"]
+    staged := TextJoin(parts[:], "")
+    file := OpenExclusivePrivate(staged)
+    if !file.valid { return IOFailure }
+    written := Write(file, bytes)
+    closed := CloseFile(file)
+    if written != bytes.count || !closed { unused RemoveFile(staged); return IOFailure }
+    if !RenamePath(staged, path) { unused RemoveFile(staged); return IOFailure }
+    return OK
+}
+#program_export
+main :: (argc: s32, argv: **u8) -> s32 {
+    if argc == 1 || (argc == 2 && (TextFromCString(argv[1]) == "--help" || TextFromCString(argv[1]) == "help")) { Help(); return 0 }
+    command := TextFromCString(argv[1])
+    inspecting := command == "inspect"
+    encoding := command == "encode" || command == "transcode"
+    if !inspecting && !encoding && command != "decode" && command != "resample" { print("invalid command; use --help\n"); return Invalid }
+    if (inspecting && argc != 3) || (!inspecting && argc < 4) { print("invalid arguments; use --help\n"); return Invalid }
+    options := DefaultOptions()
+    rate: s32
+    at: s32 = 4
+    while at < argc {
+        if at + 1 == argc { print("option requires a value\n"); return Invalid }
+        flag := TextFromCString(argv[at]); value := TextFromCString(argv[at + 1]); at += 2
+        if flag == "--rate" && command == "resample" {
+            number, valid := TextInteger(value)
+            if !valid || number < 8000 || number > 192000 { print("rate must be an integer from 8000 to 192000\n"); return Invalid }; rate = cast(s32)number
+        } else if encoding && (flag == "--bitrate" || flag == "--complexity" || flag == "--frame-ms") {
+            number, valid := TextInteger(value)
+            if !valid || number < 0 || number > 510000 { print("% requires an integer in range; use --help\n", flag); return Invalid }
+            if flag == "--bitrate" { options.bitrate = cast(s32)number }
+            if flag == "--complexity" { options.complexity = cast(s32)number }
+            if flag == "--frame-ms" { options.frame_ms = cast(s32)number }
+        } else if encoding && flag == "--vbr" {
+            if value != "on" && value != "off" && value != "constrained" { print("vbr must be on, off or constrained\n"); return Invalid }
+            options.vbr = value != "off"; options.constrained_vbr = value == "constrained"
+        } else if encoding && flag == "--bandwidth" {
+            if value == "auto" { options.bandwidth = .Auto }
+            else if value == "narrow" { options.bandwidth = .Narrow }
+            else if value == "wide" { options.bandwidth = .Wide }
+            else if value == "superwide" { options.bandwidth = .Superwide }
+            else if value == "full" { options.bandwidth = .Full }
+            else { print("unknown bandwidth; use --help\n"); return Invalid }
+        } else if encoding && flag == "--application" {
+            if value == "audio" { options.application = .Audio }
+            else if value == "voice" { options.application = .Voice }
+            else if value == "lowdelay" { options.application = .LowDelay }
+            else { print("application must be audio, voice or lowdelay\n"); return Invalid }
+        } else { print("unknown option %\n", flag); return Invalid }
+    }
+    if encoding && (options.bitrate < 6000 || options.complexity > 10 || (options.frame_ms != 5 && options.frame_ms != 10 && options.frame_ms != 20 && options.frame_ms != 40 && options.frame_ms != 60)) { print("encoder option out of range; use --help\n"); return Invalid }
+    if command == "resample" && rate == 0 { print("resample requires --rate\n"); return Invalid }
+    input_path := TextFromCString(argv[2])
+    if !inspecting && input_path == TextFromCString(argv[3]) { print("input and output paths must differ\n"); return Invalid }
+    if !inspecting {
+        canonical_input := ResolvePath(input_path)
+        canonical_output := ResolvePath(TextFromCString(argv[3]))
+        if canonical_input != "" && canonical_input == canonical_output { print("input and output identify the same file\n"); return Invalid }
+    }
+    input := MapPrivate(input_path)
+    if !input.valid { print("input/output failed\n"); return IOFailure }
+    defer { unused UnmapFile(input) }
+    if input.length > MaxBytes { print("audio limit exceeded\n"); return LimitExceeded }
+    bytes := MappedBytes(input)
+    if inspecting {
+        info: Info
+        code := Inspect(bytes, *info)
+        if code != OK { print("%\n", ErrorText(code)); return code }
+        print("Opus: % channels, % Hz, % frames, pre-skip %, input rate %, gain Q8 %, % packets\n", info.channels, info.rate, info.frames, info.pre_skip, info.original_rate, info.gain_q8, info.packets)
+        return 0
+    }
+    pcm: PCM
+    code: s32
+    if Magic(bytes, 0, "RIFF") && command != "decode" { code = WavDecode(bytes, MaxFrames, *pcm) }
+    else if command != "encode" { code = Decode(bytes, MaxFrames, *pcm) }
+    else { code = Unsupported }
+    output: Vec(u8)
+    if code == OK && encoding { code = Encode(*pcm, options, *output) }
+    if code == OK && command == "resample" {
+        converted: PCM
+        code = Resample(*pcm, rate, *converted)
+        if code == OK { code = WavEncode(*converted, *output) }
+    }
+    if code == OK && command == "decode" { code = WavEncode(*pcm, *output) }
+    if code == OK { code = Save(TextFromCString(argv[3]), VecSlice(output, 0, output.count)) }
+    if code != OK { print("%\n", ErrorText(code)); return code }
+    print("wrote % bytes\n", output.count)
+    return 0
+}

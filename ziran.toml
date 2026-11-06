@@ -1,0 +1,28 @@
+[package]
+name = "audio"
+module_roots = ["src"]
+entry = "src/audio.zi"
+links = ["opus", "samplerate", "m"]
+
+[toolchain]
+git = "https://github.com/ziranlang/ziran.git"
+ref = "master"
+
+[exports]
+types = "src/types.zi"
+ogg = "src/ogg.zi"
+wav = "src/wav.zi"
+opus = "src/opus.zi"
+pipeline = "src/pipeline.zi"
+resample = "src/resample.zi"
+
+# Pinned native sources for platform builds (Android NDK); see native/.
+[dependencies.libopus]
+git = "https://github.com/xiph/opus.git"
+ref = "ddbe48383984d56acd9e1ab6a090c54ca6b735a6"
+source = true
+
+[dependencies.libsamplerate]
+git = "https://github.com/libsndfile/libsamplerate.git"
+ref = "c96f5e3de9c4488f4e6c97f59f5245f22fda22f7"
+source = true

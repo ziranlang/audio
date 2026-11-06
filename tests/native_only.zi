@@ -1,0 +1,17 @@
+#import "types"
+#import "opus"
+#import "resample"
+#program_export
+Codec :: () -> s32 {
+    encoder: Encoder
+    code := EncoderOpen(*encoder, 1, DefaultOptions())
+    EncoderClose(*encoder)
+    return code
+}
+#program_export
+Sinc :: () -> s32 {
+    state: SincState
+    code := SincOpen(*state, 1, 44100, 48000)
+    SincClose(*state)
+    return code
+}
