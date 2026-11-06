@@ -164,6 +164,45 @@ device and compares the output with the Linux CLI. On a Moto e6 play
 and the device-encoded stream decoded on Linux at the source duration. The
 other three ABIs are build-tested only.
 
+## Windows
+
+The same recipe builds static `libopus.a` and `libsamplerate.a` for
+x86_64 MinGW. With the pinned sources from `ziran pkg path`:
+
+```sh
+cmake -S native -B build/windows/native -DCMAKE_SYSTEM_NAME=Windows \
+    -DCMAKE_SYSTEM_PROCESSOR=AMD64 -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc \
+    -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY -DCMAKE_BUILD_TYPE=Release \
+    -DOPUS_DIR="$(ziran pkg path libopus)" -DSAMPLERATE_DIR="$(ziran pkg path libsamplerate)"
+cmake --build build/windows/native
+```
+
+The archives are `build/windows/native/libopus/libopus.a` and
+`build/windows/native/libsamplerate/src/libsamplerate.a` (a CMake consumer
+calls `ziran_audio_codecs` and links the `opus` target). Generate C with
+`--define _WIN32 --define __x86_64__`; no other define is needed. libopus
+keeps its default stack protector and `_FORTIFY_SOURCE=2`, so a MinGW link
+adds GCC's `-lssp` after the archives: decoder-only consumers link
+`libopus.a -lssp -lm`, full-pipeline consumers `libopus.a libsamplerate.a
+-lssp -lm`. With `-static -static-libgcc` the programs import only
+`kernel32`, `msvcrt` and `advapi32`.
+
+`make windows-test` (after `make test`; `WINDOWS_CC` names the compiler)
+builds both archives and two codec programs, then runs them in a private
+Wine prefix under a private Xvfb display and compares them with the Linux
+CLI. The decoder-only program streams nine mono/stereo fixtures through
+`DecoderOpen`/`DecoderRead` in 997-frame chunks, rewinds with
+`DecoderRewind` and requires an identical second pass. Its inspection
+lines, five malformed-stream rejections and decoded frame counts matched
+Linux; PCM16 differed by at most 2 LSBs against the system libopus build
+(3 of 9 bit-exact). The full-pipeline program encoded `voice.wav` with the
+CLI's 24 kbps voice settings to the same size as Linux; Linux decoded it to
+the source duration. This was tested with Nix MinGW GCC 15.3.0 and Debian
+Wine 10.0, not on Windows hardware. Windows sinc resampling still returns
+`Unsupported`, so the pipeline accepts only 48-kHz input there. The `audio`
+CLI itself is not built for Windows: Ziran's `std/file_tree_linux` has no
+Win32 implementation.
+
 ## Validation and target support
 
 Ogg inspection checks capture/version, CRC, stream serial, page sequence,
@@ -178,11 +217,12 @@ compressed bitstream. Rewind assumes the validated bytes stayed unchanged.
 Native codec and sinc execution is tested with Linux x86-64 C against the
 system libopus 1.5.2 and libsamplerate 0.2.2, and on Android (see below). The
 SRC_DATA C-long ABI is represented by `isize` on Unix C targets, including
-32-bit Android. Windows sinc execution returns `Unsupported` before FFI.
-Windows and macOS codec execution is unverified. Kryon's host integration
-enables native Opus on Linux and still reports `Unsupported` on its Android,
-Windows and macOS paths until Kryon links these libraries there; browser
-playback uses the browser's own WebAudio decoder. Codec FFI and sinc are not
+32-bit Android. Windows sinc execution returns `Unsupported` before FFI,
+because Windows C `long` is 32 bits. Windows x86_64 codec execution is
+tested under Wine (see above); macOS codec execution is unverified. Kryon's
+native provider (Kryon commit 34e552d) plays Ogg Opus through these modules
+on Linux and Android and still reports `Unsupported` on Windows and macOS;
+browser playback uses the browser's own WebAudio decoder. Codec FFI and sinc are not
 portable VM implementations; reachable native calls reject bundling instead
 of fabricating output. Portable Ogg/WAV modules execute from source and saved
 IR in C, Go and `.zx` without codec libraries. The CLI's variadic libopus

@@ -1,0 +1,73 @@
+// Decoder-only Windows check, linked with libopus alone like Kryon's playback:
+// `inspect IN`, `decode IN OUT.wav` and `reject IN` mirror the Linux CLI.
+// Decode streams through DecoderOpen/DecoderRead in irregular chunks, then
+// rewinds and requires the second pass to be identical before writing WAV.
+#import "types"
+#import "opus"
+#import "ogg"
+#import "wav"
+#import "std/vec"
+#import "std/file"
+#import "std/byte_text_linux"
+
+#program_export
+main :: (argc: s32, argv: **u8) -> s32 {
+    if argc < 3 { print("windows_decode inspect|decode|reject INPUT [OUTPUT.wav]\n"); return Invalid }
+    command := TextFromCString(argv[1])
+    bytes: Vec(u8)
+    if !ReadFileInto(TextFromCString(argv[2]), *bytes) { print("input/output failed\n"); return IOFailure }
+    input := VecSlice(bytes, 0, bytes.count)
+    if command == "inspect" {
+        info: Info
+        code := Inspect(input, *info)
+        if code != OK { print("%\n", ErrorText(code)); return code }
+        print("Opus: % channels, % Hz, % frames, pre-skip %, input rate %, gain Q8 %, % packets\n", info.channels, info.rate, info.frames, info.pre_skip, info.original_rate, info.gain_q8, info.packets)
+        return 0
+    }
+    decoder: Decoder
+    code := DecoderOpen(*decoder, input, MaxFrames)
+    if command == "reject" {
+        DecoderClose(*decoder)
+        print("%\n", ErrorText(code))
+        if code == OK { return 1 }
+        return 0
+    }
+    if command != "decode" || argc != 4 { DecoderClose(*decoder); return Invalid }
+    if code != OK { print("%\n", ErrorText(code)); return code }
+    defer { DecoderClose(*decoder) }
+    channels := cast(s64)decoder.info.channels
+    pcm: PCM
+    pcm.rate = 48000; pcm.channels = decoder.info.channels
+    if !VecResize(pcm.samples, decoder.info.frames * channels) { return AllocationFailed }
+    // 997-frame scratch crosses packet and page boundaries at odd offsets.
+    scratch: [1994]float32
+    at: s64
+    while true {
+        frames: s64
+        code = DecoderRead(*decoder, scratch[0:997 * channels], *frames)
+        if code != OK { print("%\n", ErrorText(code)); return code }
+        if frames == 0 { break }
+        for i: cast(s64)0..frames * channels - 1 { pcm.samples[at * channels + i] = scratch[i] }
+        at += frames
+    }
+    if at != decoder.info.frames { print("decoded % of % frames\n", at, decoder.info.frames); return Malformed }
+    if DecoderRewind(*decoder) != OK { print("rewind failed\n"); return NativeFailure }
+    again: s64
+    while true {
+        frames: s64
+        code = DecoderRead(*decoder, scratch[0:channels], *frames)
+        if code != OK { print("%\n", ErrorText(code)); return code }
+        if frames == 0 { break }
+        for i: cast(s64)0..channels - 1 {
+            if scratch[i] != pcm.samples[again * channels + i] { print("rewind differs at frame %\n", again); return Malformed }
+        }
+        again += 1
+    }
+    if again != at { print("rewind decoded % of % frames\n", again, at); return Malformed }
+    output: Vec(u8)
+    code = WavEncode(*pcm, *output)
+    if code != OK { print("%\n", ErrorText(code)); return code }
+    if !WriteEntireFile(TextFromCString(argv[3]), TextFromBytes(VecSlice(output, 0, output.count))) { print("input/output failed\n"); return IOFailure }
+    print("decoded and rewound % frames\n", at)
+    return 0
+}
