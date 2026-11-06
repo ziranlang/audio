@@ -220,9 +220,10 @@ SRC_DATA C-long ABI is represented by `isize` on Unix C targets, including
 32-bit Android. Windows sinc execution returns `Unsupported` before FFI,
 because Windows C `long` is 32 bits. Windows x86_64 codec execution is
 tested under Wine (see above); macOS codec execution is unverified. Kryon's
-native provider (Kryon commit 34e552d) plays Ogg Opus through these modules
-on Linux and Android and still reports `Unsupported` on Windows and macOS;
-browser playback uses the browser's own WebAudio decoder. Codec FFI and sinc are not
+native provider plays Ogg Opus through these modules on Linux, Android
+(Kryon commit 34e552d) and Windows MinGW (Kryon commit 34d0ce4, linking
+`libopus.a -lssp -lm`); macOS still reports `Unsupported`, and browser
+playback uses the browser's own WebAudio decoder. Codec FFI and sinc are not
 portable VM implementations; reachable native calls reject bundling instead
 of fabricating output. Portable Ogg/WAV modules execute from source and saved
 IR in C, Go and `.zx` without codec libraries. The CLI's variadic libopus
