@@ -224,12 +224,12 @@ native provider plays Ogg Opus through these modules on Linux, Android
 (Kryon commit 34e552d) and Windows MinGW (Kryon commit 34d0ce4, linking
 `libopus.a -lssp -lm`); macOS still reports `Unsupported`, and browser
 playback uses the browser's own WebAudio decoder. Codec FFI and sinc are not
-portable VM implementations; reachable native calls reject bundling instead
+portable implementations; reachable native calls reject bundling instead
 of fabricating output. Portable Ogg/WAV modules execute from source and saved
 IR in C, Go and `.zx` without codec libraries. The CLI's variadic libopus
 controls require the C target; Go CLI/native codec builds are not supported.
 
-Run `make test` for source/saved-IR native codec+CLI tests, portable VM/Go
+Run `make test` for source/saved-IR native codec+CLI tests, engine/Go
 execution, FFI rejection, streaming parity, alias rejection, transients,
 malformed data, atomic output and FFmpeg interoperability. Python and FFmpeg
 are test tools only. Strict voice/chirp PCM comparison forces FFmpeg's
