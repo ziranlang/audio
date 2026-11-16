@@ -7,6 +7,8 @@
 #import "resample"
 #import "mpeg_audio"
 #import "mp3"
+#import "ogg_vorbis"
+#import "vorbis"
 #import "std/file"
 #import "std/byte_text_linux"
 #import "std/file_tree_linux"
@@ -14,17 +16,17 @@
 #import "std/text_tools"
 
 Help :: () {
-    print("audio inspect INPUT.opus|INPUT.mp3\n")
+    print("audio inspect INPUT.opus|INPUT.ogg|INPUT.mp3\n")
     print("audio encode INPUT.wav OUTPUT.opus [options]\n")
-    print("audio decode INPUT.opus|INPUT.mp3 OUTPUT.wav\n")
-    print("audio transcode INPUT.wav|INPUT.opus|INPUT.mp3 OUTPUT.opus [options]\n")
-    print("audio resample INPUT.wav|INPUT.opus|INPUT.mp3 OUTPUT.wav --rate HZ\n")
+    print("audio decode INPUT.opus|INPUT.ogg|INPUT.mp3 OUTPUT.wav\n")
+    print("audio transcode INPUT.wav|INPUT.opus|INPUT.ogg|INPUT.mp3 OUTPUT.opus [options]\n")
+    print("audio resample INPUT.wav|INPUT.opus|INPUT.ogg|INPUT.mp3 OUTPUT.wav --rate HZ\n")
     print("options: --bitrate 6000..510000 --vbr on|off|constrained\n")
     print("         --bandwidth auto|narrow|wide|superwide|full\n")
     print("         --application audio|voice|lowdelay --complexity 0..10\n")
     print("         --frame-ms 5|10|20|40|60\n")
-    print("Formats are detected from content: Ogg Opus, RIFF WAV, else MPEG audio (MP3; MPEG-1/2/2.5 Layers I-III).\n")
-    print("Native C: libopus, dr_mp3 and libsamplerate best sinc. Whole-file input cap 256 MiB; PCM cap 10 min at 48 kHz.\n")
+    print("Formats are detected from content: Ogg Vorbis, Ogg Opus, RIFF WAV, else MPEG audio (MP3; MPEG-1/2/2.5 Layers I-III).\n")
+    print("Native C: libopus, stb_vorbis, dr_mp3 and libsamplerate best sinc. Whole-file input cap 256 MiB; PCM cap 10 min at 48 kHz.\n")
 }
 // Stage beside the destination; failures leave an existing destination intact.
 // A pre-existing .audio-part file causes an explicit error, never deletion.
@@ -93,7 +95,17 @@ main :: (argc: s32, argv: **u8) -> s32 {
     defer { unused UnmapFile(input) }
     if input.length > MaxBytes { print("audio limit exceeded\n"); return LimitExceeded }
     bytes := MappedBytes(input)
-    is_ogg := Magic(bytes, 0, "OggS")
+    is_vorbis := VorbisProbe(bytes)
+    is_ogg := Magic(bytes, 0, "OggS") && !is_vorbis
+    if inspecting && is_vorbis {
+        info: VorbisInfo
+        comments: VorbisComments
+        code := VorbisInspectComments(bytes, *info, *comments)
+        if code != OK { print("%\n", ErrorText(code)); return code }
+        VorbisPrintInfo(*info)
+        VorbisPrintComments(*comments)
+        return 0
+    }
     if inspecting && !is_ogg {
         info: Mp3Info
         code := Mp3Inspect(bytes, *info)
@@ -111,6 +123,7 @@ main :: (argc: s32, argv: **u8) -> s32 {
     pcm: PCM
     code: s32
     if Magic(bytes, 0, "RIFF") && command != "decode" { code = WavDecode(bytes, MaxFrames, *pcm) }
+    else if command != "encode" && is_vorbis { code = VorbisDecode(bytes, MaxFrames, *pcm) }
     else if command != "encode" && is_ogg { code = Decode(bytes, MaxFrames, *pcm) }
     else if command != "encode" { code = Mp3Decode(bytes, MaxFrames, *pcm) }
     else { code = Unsupported }

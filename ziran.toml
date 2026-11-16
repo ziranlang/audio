@@ -2,7 +2,7 @@
 name = "audio"
 module_roots = ["src"]
 entry = "src/audio.zi"
-links = ["ziran_mp3", "opus", "samplerate", "m"]
+links = ["ziran_mp3", "ziran_vorbis", "opus", "samplerate", "m"]
 
 [toolchain]
 git = "https://github.com/ziranlang/ziran.git"
@@ -18,9 +18,13 @@ resample = "src/resample.zi"
 mpeg_audio = "src/mpeg_audio.zi"
 mp3 = "src/mp3.zi"
 mp3_resample = "src/mp3_resample.zi"
+ogg_vorbis = "src/ogg_vorbis.zi"
+vorbis = "src/vorbis.zi"
+vorbis_resample = "src/vorbis_resample.zi"
 
 # Pinned native sources for platform builds; see native/. dr_libs supplies
-# dr_mp3 (public domain or MIT-0), compiled into libziran_mp3.a.
+# dr_mp3 (public domain or MIT-0), compiled into libziran_mp3.a; stb supplies
+# stb_vorbis (public domain or MIT), compiled into libziran_vorbis.a.
 [dependencies.libopus]
 git = "https://github.com/xiph/opus.git"
 ref = "ddbe48383984d56acd9e1ab6a090c54ca6b735a6"
@@ -34,4 +38,9 @@ source = true
 [dependencies.dr_libs]
 git = "https://github.com/mackron/dr_libs.git"
 ref = "f12e197fd462e4c22873fbd70d11b1d2f2c1dc3c"
+source = true
+
+[dependencies.stb]
+git = "https://github.com/nothings/stb.git"
+ref = "9600522de53973336fa033a289858a4354cbb04c"
 source = true

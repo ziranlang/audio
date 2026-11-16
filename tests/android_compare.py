@@ -25,7 +25,7 @@ linux_inspect = inspect_lines(host / 'linux.log')
 assert device_inspect == linux_inspect, (device_inspect, linux_inspect)
 
 mp3_outputs = [Path(name).stem + '-decoded.wav' for name in mp3s]
-for name in ('short.wav', 'voice-decoded.wav', 'chirp-decoded.wav', 'voice-16k.wav', 'chirp-44k.wav', 'vbr-48k.wav', *mp3_outputs):
+for name in ('short.wav', 'voice-decoded.wav', 'chirp-decoded.wav', 'voice-16k.wav', 'chirp-44k.wav', 'vbr-48k.wav', 'vorbis-48k.wav', *mp3_outputs):
     (device_params, device), (linux_params, reference) = pcm(host / name), pcm(linux / name)
     assert device_params == linux_params, (name, device_params, linux_params)
     worst = max((abs(a - b) for a, b in zip(device, reference)), default=0)
@@ -39,4 +39,4 @@ subprocess.run([str(Path('build/bin/audio').resolve()), 'decode', str(host / 'vo
 (_, _, source_frames), _ = pcm(linux / 'voice.wav')
 assert (rate, channels, frames) == (48000, 1, source_frames), (rate, channels, frames, source_frames)
 print(f'android {abi} encode: {(host / "voice-encoded.opus").stat().st_size} bytes, decoded on Linux to {frames} frames')
-print(f'android {abi} device {serial}: native Opus decode/encode, {len(mp3s)} MP3 decodes and best sinc resampling matched Linux')
+print(f'android {abi} device {serial}: native Opus decode/encode, {len(mp3s)} MP3 and Vorbis decodes and best sinc resampling matched Linux')

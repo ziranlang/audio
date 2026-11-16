@@ -24,11 +24,14 @@ def worst(a, b):
 
 windows_log = [line.strip() for line in (run / 'windows.log').read_text().splitlines() if line.strip()]
 linux_log = [line.strip() for line in (linux / 'linux.log').read_text().splitlines() if line.strip()]
-inspect_windows = [line for line in windows_log if line.startswith(('Opus:', 'MP3:'))]
-inspect_linux = [line for line in linux_log if line.startswith(('Opus:', 'MP3:'))]
-assert len(inspect_linux) == len(decoded) and inspect_windows == inspect_linux, (inspect_windows, inspect_linux)
-errors_windows = [line for line in windows_log if not line.startswith(('Opus:', 'MP3:', 'decoded and rewound', 'wrote'))]
-errors_linux = [line for line in linux_log if not line.startswith(('Opus:', 'MP3:'))]
+# One summary line per inspected file; Vorbis adds vendor and comment lines.
+INSPECT = ('Opus:', 'MP3:', 'Vorbis')
+inspect_windows = [line for line in windows_log if line.startswith(INSPECT)]
+inspect_linux = [line for line in linux_log if line.startswith(INSPECT)]
+summaries = [line for line in inspect_linux if line.startswith(('Opus:', 'MP3:', 'Vorbis:'))]
+assert len(summaries) == len(decoded) and inspect_windows == inspect_linux, (inspect_windows, inspect_linux)
+errors_windows = [line for line in windows_log if not line.startswith(INSPECT + ('decoded and rewound', 'wrote'))]
+errors_linux = [line for line in linux_log if not line.startswith(INSPECT)]
 assert len(errors_linux) == len(rejected) and errors_windows == errors_linux, (errors_windows, errors_linux)
 print(f'windows inspect: {len(decoded)} fixtures matched Linux; {len(rejected)} malformed fixtures rejected as on Linux')
 
@@ -58,4 +61,4 @@ print(f'windows encode voice.wav: {windows_opus.stat().st_size} bytes (Linux {li
 status = (run / 'resample.log').read_text().strip()
 assert status == 'unsupported audio capability', status
 print('windows resample: SincOpen returns Unsupported before libsamplerate (documented boundary)')
-print(f'windows x86_64 under Wine: native Opus and MP3 decode/rewind and Opus encode matched Linux ({exact}/{len(decoded)} decodes bit-exact)')
+print(f'windows x86_64 under Wine: native Opus, MP3 and Vorbis decode/rewind and Opus encode matched Linux ({exact}/{len(decoded)} decodes bit-exact)')

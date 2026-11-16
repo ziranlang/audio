@@ -1,0 +1,162 @@
+// Ogg Vorbis decoding (Vorbis I, mono and stereo, 8-192 kHz) through
+// stb_vorbis (the pinned `stb` source dependency, compiled by
+// native/ziran_vorbis.c into libziran_vorbis.a). Native C only: link
+// `libziran_vorbis.a -lm`. audio/ogg_vorbis validates the whole stream
+// first, so stb_vorbis, which checks neither CRCs nor serial numbers, only
+// sees one complete logical stream whose timeline starts at zero.
+#import "types"
+#import "std/vec"
+#import "std/file"
+#import "ogg_vorbis"
+#scope_file
+vorbis :: #system_library "ziran_vorbis";
+NativeOpen :: (data: *u8, size: usize, rate: *s32, channels: *s32) -> *void #foreign vorbis "ziran_vorbis_open";
+NativeClose :: (state: *void) #foreign vorbis "ziran_vorbis_close";
+NativeRead :: (state: *void, output: *float32, frames: s64) -> s64 #foreign vorbis "ziran_vorbis_read";
+NativeSeek :: (state: *void, frame: s64) -> s32 #foreign vorbis "ziran_vorbis_seek";
+// Frames the next read requests: the caller's whole frames, capped at the
+// logical end; -1 rejects a closed decoder or a partial-frame buffer.
+Wanted :: (decoder: *VorbisDecoder, samples: s64) -> s64 {
+    if decoder.handle == null || samples <= 0 || samples % decoder.info.channels != 0 { return -1 }
+    wanted := samples / decoder.info.channels
+    left := decoder.info.frames - decoder.position
+    return ifx wanted < left then wanted else left
+}
+// stb_vorbis ending before the final granule position is truncated or
+// corrupt audio; the caller discards that read.
+Advance :: (decoder: *VorbisDecoder, wanted: s64, got: s64, frames: *s64) -> s32 {
+    if got != wanted { return Malformed }
+    decoder.position += wanted; <<frames = wanted
+    return OK
+}
+
+#scope_export
+// Single-owner native state over borrowed bytes (or bytes it read itself
+// with VorbisDecoderOpenFile). Do not copy a live decoder or call it
+// concurrently; keep borrowed input alive and unchanged until close.
+// `comments` holds the stream's comment header while the decoder is open.
+VorbisDecoder :: struct {
+    handle: *void
+    info: VorbisInfo
+    comments: VorbisComments
+    position: s64 // next PCM frame a read returns
+    owned: Vec(u8)
+}
+VorbisDecoderClose :: (decoder: *VorbisDecoder) {
+    if decoder.handle != null { NativeClose(decoder.handle) }
+    decoder.handle = null; decoder.info = VorbisInfo.{}; decoder.position = 0
+    VorbisCommentsFree(*decoder.comments)
+    VecFree(decoder.owned)
+}
+// Inspects INPUT, then opens stb_vorbis over it. MAX_FRAMES bounds the
+// declared duration.
+VorbisDecoderOpen :: (decoder: *VorbisDecoder, input: []u8, max_frames: s64) -> s32 {
+    if decoder.handle != null || max_frames <= 0 || max_frames > VorbisMaxStreamFrames { return Invalid }
+    metadata: VorbisInfo
+    comments: VorbisComments
+    code := VorbisInspectComments(input, *metadata, *comments)
+    if code != OK { return code }
+    if metadata.frames > max_frames { return LimitExceeded }
+    rate: s32; channels: s32
+    handle := NativeOpen(*input[0], cast(usize)input.count, *rate, *channels)
+    if handle == null { return Malformed }
+    if rate != metadata.rate || channels != metadata.channels { NativeClose(handle); return Malformed }
+    decoder.handle = handle; decoder.info = metadata; decoder.position = 0
+    VecSwap(decoder.comments.text, comments.text); VecSwap(decoder.comments.spans, comments.spans)
+    decoder.comments.vendor = comments.vendor
+    return OK
+}
+// Reads the whole file (at most MaxBytes) into the decoder, which then owns
+// it until VorbisDecoderClose.
+VorbisDecoderOpenFile :: (decoder: *VorbisDecoder, path: string, max_frames: s64) -> s32 {
+    if decoder.handle != null || max_frames <= 0 || max_frames > VorbisMaxStreamFrames { return Invalid }
+    VecFree(decoder.owned)
+    if !ReadFileInto(path, *decoder.owned) { VecFree(decoder.owned); return IOFailure }
+    if decoder.owned.count > MaxBytes { VecFree(decoder.owned); return LimitExceeded }
+    code := VorbisDecoderOpen(decoder, VecSlice(decoder.owned, 0, decoder.owned.count), max_frames)
+    if code != OK { VecFree(decoder.owned) }
+    return code
+}
+// Fills interleaved float frames. OK with zero frames is the logical end.
+// An error may leave a filled prefix: discard it, then rewind or close.
+VorbisDecoderRead :: (decoder: *VorbisDecoder, output: []float32, frames: *s64) -> s32 {
+    <<frames = 0
+    wanted := Wanted(decoder, output.count)
+    if wanted < 0 { return Invalid }
+    if wanted == 0 { return OK }
+    return Advance(decoder, wanted, NativeRead(decoder.handle, *output[0], wanted), frames)
+}
+// The same stream as interleaved PCM16: the float samples converted with
+// Pcm16, so they equal the WAV output of the same decode. A NaN, which only a
+// corrupt stream can produce, becomes silence.
+VorbisDecoderReadS16 :: (decoder: *VorbisDecoder, output: []s16, frames: *s64) -> s32 {
+    <<frames = 0
+    wanted := Wanted(decoder, output.count)
+    if wanted < 0 { return Invalid }
+    channels := cast(s64)decoder.info.channels
+    scratch: [4096]float32
+    done: s64
+    while done < wanted {
+        count := wanted - done
+        if count > 2048 { count = 2048 }
+        got: s64
+        code := Advance(decoder, count, NativeRead(decoder.handle, *scratch[0], count), *got)
+        if code != OK { return code }
+        for i: cast(s64)0..count * channels - 1 {
+            value := cast(float64)scratch[i]
+            output[done * channels + i] = ifx value != value then cast(s16)0 else Pcm16(value)
+        }
+        done += count
+    }
+    <<frames = done
+    return OK
+}
+// Moves to exact PCM frame FRAME (0..frames): the next read returns the
+// same samples a read from the start would. stb_vorbis bisects the pages
+// for the one holding FRAME, then decodes forward from the packet before it,
+// so the window overlap is primed. An error leaves the decoder to rewind or
+// close.
+VorbisDecoderSeek :: (decoder: *VorbisDecoder, frame: s64) -> s32 {
+    if decoder.handle == null || frame < 0 || frame > decoder.info.frames { return Invalid }
+    if frame < decoder.info.frames && NativeSeek(decoder.handle, frame) == 0 { return Malformed }
+    decoder.position = frame
+    return OK
+}
+VorbisDecoderRewind :: (decoder: *VorbisDecoder) -> s32 { return VorbisDecoderSeek(decoder, 0) }
+
+// Whole-file float decode at the stream's own rate, bounded by MaxFrames.
+// OUTPUT is unchanged on an error.
+VorbisDecode :: (input: []u8, max_frames: s64, output: *PCM) -> s32 {
+    decoder: VorbisDecoder
+    code := VorbisDecoderOpen(*decoder, input, max_frames)
+    if code != OK { return code }
+    defer { VorbisDecoderClose(*decoder) }
+    if decoder.info.frames > MaxFrames { return LimitExceeded }
+    samples: Vec(float32)
+    count := decoder.info.frames * decoder.info.channels
+    if !VecResize(samples, count) { return AllocationFailed }
+    frames: s64
+    code = VorbisDecoderRead(*decoder, VecSlice(samples, 0, count), *frames)
+    if code != OK { return code }
+    output.rate = decoder.info.rate; output.channels = decoder.info.channels
+    SwapSamples(output, *samples)
+    return OK
+}
+// Whole-file interleaved s16 decode; INFO describes the samples. Both
+// outputs are unchanged on an error.
+VorbisDecodeS16 :: (input: []u8, max_frames: s64, output: *Vec(s16), info: *VorbisInfo) -> s32 {
+    decoder: VorbisDecoder
+    code := VorbisDecoderOpen(*decoder, input, max_frames)
+    if code != OK { return code }
+    defer { VorbisDecoderClose(*decoder) }
+    if decoder.info.frames > MaxFrames { return LimitExceeded }
+    samples: Vec(s16)
+    count := decoder.info.frames * decoder.info.channels
+    if !VecResize(samples, count) { return AllocationFailed }
+    frames: s64
+    code = VorbisDecoderReadS16(*decoder, VecSlice(samples, 0, count), *frames)
+    if code != OK { return code }
+    <<info = decoder.info
+    VecSwap(samples, <<output)
+    return OK
+}

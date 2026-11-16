@@ -1,7 +1,8 @@
 #!/bin/sh
-# Windows x86_64 MinGW build of the pinned libopus/libsamplerate/dr_libs
+# Windows x86_64 MinGW build of the pinned libopus/libsamplerate/dr_libs/stb
 # sources and two codec programs, run under Wine and compared with the Linux
-# CLI on the `make test` Opus fixtures and the committed MP3 fixtures.
+# CLI on the `make test` Opus fixtures and the committed MP3 and Vorbis
+# fixtures.
 # Invoke through build-queue (`make windows-test`).
 # WINDOWS_CC names the MinGW compiler (default x86_64-w64-mingw32-gcc).
 set -eu
@@ -17,7 +18,9 @@ fixtures=build/tests/fixtures
 decoded="short voice chirp external-1 external-2 full narrow vbr-off encoded-2"
 rejected="bad-crc truncated chained trailing bad-preskip"
 mp3s="cbr.mp3 vbr.mp3 mono.mp3 mpeg2.mp3 mpeg25.mp3 noxing.mp3 id3.mp3 layer2.mp2 long.mp3"
-mp3_names=$(for file in $mp3s; do printf '%s ' "${file%.*}"; done)
+# Vorbis copies are prefixed: mono and long also name MP3 fixtures.
+oggs="vorbis-stereo.ogg vorbis-mono.ogg vorbis-rate22.ogg vorbis-rate48.ogg vorbis-comments.ogg vorbis-long.ogg"
+mp3_names=$(for file in $mp3s $oggs; do printf '%s ' "${file%.*}"; done)
 for name in $decoded $rejected; do
     test -f "$fixtures/$name.opus" || { echo "missing $fixtures/$name.opus; run make test first" >&2; exit 1; }
 done
@@ -33,12 +36,13 @@ samplerate=$("$ZIRAN" pkg path libsamplerate --offline)
 "$CMAKE" -S native -B "$out/native" -DCMAKE_SYSTEM_NAME=Windows -DCMAKE_SYSTEM_PROCESSOR=AMD64 \
     -DCMAKE_C_COMPILER="$(command -v "$windows_cc")" -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
     -DCMAKE_BUILD_TYPE=Release -DOPUS_DIR="$opus" -DSAMPLERATE_DIR="$samplerate" \
-    -DDR_LIBS_DIR="$("$ZIRAN" pkg path dr_libs --offline)" >"$out/cmake.log" 2>&1 &&
+    -DDR_LIBS_DIR="$("$ZIRAN" pkg path dr_libs --offline)" -DSTB_DIR="$("$ZIRAN" pkg path stb --offline)" >"$out/cmake.log" 2>&1 &&
     "$CMAKE" --build "$out/native" --parallel 2 >>"$out/cmake.log" 2>&1 || { tail -n 40 "$out/cmake.log" >&2; exit 1; }
 libopus=$out/native/libopus/libopus.a
 libsamplerate=$out/native/libsamplerate/src/libsamplerate.a
 libmp3=$out/native/libziran_mp3.a
-test -f "$libopus" && test -f "$libsamplerate" && test -f "$libmp3"
+libvorbis=$out/native/libziran_vorbis.a
+test -f "$libopus" && test -f "$libsamplerate" && test -f "$libmp3" && test -f "$libvorbis"
 
 # Nix splits mcfgthread's static runtime from its GCC wrapper; follow only
 # this compiler's declared inputs. Distribution MinGW needs no extra path.
@@ -60,7 +64,7 @@ test -f "$ziran_root/include/zir_vec.h" || { echo "no Ziran C headers under $zir
 # libopus keeps its default stack protector and _FORTIFY_SOURCE, which on
 # MinGW resolve from GCC's static libssp.
 for program in decode encode; do
-    libs="$libopus $libmp3"
+    libs="$libopus $libmp3 $libvorbis"
     test "$program" = decode || libs="$libopus $libsamplerate"
     rm -rf "$out/$program-c"
     "$ZIRAN" build --target=c --no-main --define _WIN32 --define __x86_64__ --root tests \
@@ -73,19 +77,22 @@ for program in decode encode; do
         echo "windows_$program.exe imports a non-system DLL" >&2; exit 1
     fi
 done
-printf 'windows: libopus, libsamplerate, libziran_mp3 and codec programs built with %s\n' "$("$windows_cc" -dumpversion)"
+printf 'windows: libopus, libsamplerate, libziran_mp3, libziran_vorbis and codec programs built with %s\n' "$("$windows_cc" -dumpversion)"
 
 cd "$out/run"
 for name in $decoded $rejected; do cp "$root/$fixtures/$name.opus" .; done
 cp "$root/$fixtures/voice.wav" .
 for file in $mp3s; do cp "$root/tests/fixtures/mp3/$file" .; done
+for file in $oggs; do cp "$root/tests/fixtures/vorbis/${file#vorbis-}" "$file"; done
 head -c 4000 cbr.mp3 >cbr-truncated.mp3
+head -c 6000 vorbis-stereo.ogg >vorbis-truncated.ogg
 mkdir -p linux
 {
     for name in $decoded; do echo "inspect $name.opus"; echo "decode $name.opus $name-decoded.wav"; done
     for name in $rejected; do echo "reject $name.opus"; done
-    for file in $mp3s; do echo "inspect $file"; echo "decode $file ${file%.*}-decoded.wav"; done
+    for file in $mp3s $oggs; do echo "inspect $file"; echo "decode $file ${file%.*}-decoded.wav"; done
     echo "reject cbr-truncated.mp3"
+    echo "reject vorbis-truncated.ogg"
 } >decode.commands
 # Linux reference: the CLI on the same inputs (reject = CLI decode status).
 rm -f linux/*
@@ -93,10 +100,11 @@ rm -f linux/*
     "$root/build/bin/audio" inspect "../$name.opus"
     "$root/build/bin/audio" decode "../$name.opus" "$name-decoded.wav" >/dev/null
 done && for name in $rejected; do "$root/build/bin/audio" decode "../$name.opus" rejected.wav || :; done &&
-for file in $mp3s; do
+for file in $mp3s $oggs; do
     "$root/build/bin/audio" inspect "../$file"
     "$root/build/bin/audio" decode "../$file" "${file%.*}-decoded.wav" >/dev/null
-done && { "$root/build/bin/audio" decode ../cbr-truncated.mp3 rejected.wav || :; }
+done && { "$root/build/bin/audio" decode ../cbr-truncated.mp3 rejected.wav || :; } &&
+{ "$root/build/bin/audio" decode ../vorbis-truncated.ogg rejected.wav || :; }
 "$root/build/bin/audio" encode ../voice.wav voice.opus --bitrate 24000 --application voice --bandwidth wide --vbr constrained >/dev/null) >linux/linux.log
 rm -f ./*-decoded.wav windows-voice.opus
 # Wine state stays private to this output; package lookups above keep the
@@ -135,4 +143,4 @@ xvfb-run -a -n 400 -s '-screen 0 640x480x24' env -u TMPDIR HOME="$root/$out/home
 ' sh "$wine"
 cd "$root"
 # shellcheck disable=SC2086
-python3 tests/windows_compare.py "$out/run" build/bin/audio $decoded $mp3_names -- $rejected cbr-truncated
+python3 tests/windows_compare.py "$out/run" build/bin/audio $decoded $mp3_names -- $rejected cbr-truncated vorbis-truncated

@@ -1,8 +1,8 @@
 # Audio for Ziran
 
-Reusable Opus encoding/decoding, MP3 decoding, Ogg Opus and MPEG audio
-inspection, best-quality sinc sample-rate conversion and WAV I/O, with a
-native `audio` command. There is
+Reusable Opus encoding/decoding, MP3 and Ogg Vorbis decoding, Ogg Opus, Ogg
+Vorbis and MPEG audio inspection, best-quality sinc sample-rate conversion and
+WAV I/O, with a native `audio` command. There is
 no Kryon, Raylib, audio-device or runtime subprocess dependency. GUI hosts
 choose their own playback sink and call the same modules as command-line tools.
 
@@ -10,9 +10,10 @@ choose their own playback sink and call the same modules as command-line tools.
 
 Install Ziran, CMake plus the development/link libraries for **libopus** and
 **libsamplerate** (`libopus-dev` and `libsamplerate0-dev` on Debian-family
-Linux). The MP3 decoder is compiled from the pinned `dr_libs` source: `make`
-builds `build/native/linux/libziran_mp3.a` through `native/CMakeLists.txt`
-before the CLI. Then run:
+Linux). The MP3 and Vorbis decoders are compiled from the pinned `dr_libs`
+and `stb` sources: `make` builds `build/native/linux/libziran_mp3.a` and
+`build/native/linux/libziran_vorbis.a` through `native/CMakeLists.txt` before
+the CLI. Then run:
 
 ```sh
 make
@@ -26,10 +27,14 @@ build/bin/audio resample input.wav speech.wav --rate 16000
 build/bin/audio inspect song.mp3
 build/bin/audio decode song.mp3 song.wav
 build/bin/audio resample song.mp3 song-48k.wav --rate 48000
+build/bin/audio inspect music.ogg
+build/bin/audio decode music.ogg music.wav
+build/bin/audio resample music.ogg music-48k.wav --rate 48000
 ```
 
-Formats are chosen from the content, not the file name: `OggS` is Ogg
-Opus, `RIFF` is WAV, anything else is read as MPEG audio. `inspect` on an
+Formats are chosen from the content, not the file name: `OggS` whose first
+packet is a Vorbis identification header is Ogg Vorbis, any other `OggS` is
+Ogg Opus, `RIFF` is WAV, anything else is read as MPEG audio. `inspect` on an
 MP3 prints the MPEG version and layer, channels, rate, exact frames and
 duration, bitrate, VBR or CBR, the LAME delay/padding and the frame count:
 
@@ -37,15 +42,29 @@ duration, bitrate, VBR or CBR, the LAME delay/padding and the frame count:
 MP3: MPEG-1 Layer III, 2 channels, 44100 Hz, 13230 frames, 0.300 s, 128000 bps CBR, delay 1105, padding 641, 13 MPEG frames
 ```
 
+On Ogg Vorbis it prints the channels, rate, exact frames and duration, the
+nominal bitrate hint, the block sizes, mode count, end trim and packet and
+comment counts, then the vendor string and each comment (control bytes shown
+as `?`):
+
+```text
+Vorbis: 1 channels, 32000 Hz, 9600 frames, 0.300 s, 52000 bps nominal, blocks 256/2048, 2 modes, end trim 0, 13 packets, 4 comments
+Vorbis vendor: ffmpeg
+Vorbis comment: encoder=Lavc libvorbis
+Vorbis comment: title=Ziran fixture
+Vorbis comment: artist=Ziran audio
+Vorbis comment: DESCRIPTION=Vorbis comments, ünïcödé
+```
+
 The CLI supports PCM16 and IEEE float32 RIFF WAV input, and mapping-family-0
 Ogg Opus (mono/stereo) with the exact 19-byte version-1 identification header.
 Other Opus header versions/extensions are outside this bounded profile.
-Decoded Opus WAV output is PCM16 at 48 kHz; decoded MP3 WAV output is
-PCM16 at the stream's own rate. `resample`
+Decoded Opus WAV output is PCM16 at 48 kHz; decoded MP3 and Vorbis WAV
+output is PCM16 at the stream's own rate. `resample`
 accepts either format and writes PCM16 WAV at the requested 8000–192000 Hz
-rate. `transcode` decodes WAV/Opus and encodes Opus; it is a lossy re-encode
-when its source is already Opus or MP3. Other audio formats belong to
-separate modules; existing `std/vorbis` and `std/vorbis_linux` support is independent.
+rate. `transcode` decodes WAV, Opus, Vorbis or MP3 and encodes Opus; it is a
+lossy re-encode unless its source is WAV. Ziran's whole-file `std/vorbis` and
+`std/vorbis_linux` are independent of `audio/vorbis`.
 
 Encoder options are `--bitrate` in bits/second (6000–510000), `--vbr`
 `on|off|constrained`, `--bandwidth` `auto|narrow|wide|superwide|full`,
@@ -82,8 +101,9 @@ not play audio or open audio devices.
 ## Callable modules
 
 Exports are `audio/types`, `audio/ogg`, `audio/wav`, `audio/opus`,
-`audio/resample`, `audio/pipeline`, `audio/mpeg_audio`, `audio/mp3` and
-`audio/mp3_resample`.
+`audio/resample`, `audio/pipeline`, `audio/mpeg_audio`, `audio/mp3`,
+`audio/mp3_resample`, `audio/ogg_vorbis`, `audio/vorbis` and
+`audio/vorbis_resample`.
 Full-pipeline native consumers declare `links = ["opus", "samplerate", "m"]` in their
 root manifest's `[package]` table, or use equivalent linker flags in a custom
 host. Ziran does not inherit system links from dependencies. Codec-only consumers need
@@ -91,6 +111,9 @@ only `links = ["opus", "m"]`; `audio/opus` does not import the resampler.
 MP3 decode-only consumers link `libziran_mp3.a` and `-lm`
 (`links = ["ziran_mp3", "m"]` with the archive's directory in `LDFLAGS`);
 `audio/mp3_resample` adds `samplerate`. `audio/mpeg_audio` is portable.
+Vorbis decode-only consumers likewise link `libziran_vorbis.a` and `-lm`
+(`links = ["ziran_vorbis", "m"]`); `audio/vorbis_resample` adds
+`samplerate`, and `audio/ogg_vorbis` is portable.
 
 ```zi
 Types :: #import "audio/types"
@@ -187,6 +210,73 @@ decoders have one owner and must not be copied or shared across threads.
 For streaming at another rate, pass `Mp3DecoderRead` chunks to
 `SincOpen`/`SincProcess`.
 
+## Ogg Vorbis
+
+`audio/vorbis` decodes Ogg Vorbis (Vorbis I, floor 1, mono and stereo,
+8–192 kHz) through [stb_vorbis](https://github.com/nothings/stb) (public
+domain or MIT; its `LICENSE` is in the pinned source). The manifest pins
+`stb` at commit `9600522de53973336fa033a289858a4354cbb04c` (stb_vorbis 1.24)
+as a `source = true` dependency. `native/ziran_vorbis.c` is stb_vorbis' one
+implementation unit, built without stdio, the pushdata API, integer
+conversion or comment parsing, plus open, read and seek calls.
+Redistributors ship stb's `LICENSE` alongside the binary.
+
+- `VorbisProbe([]u8) -> bool` and `VorbisInspect([]u8, *VorbisInfo) -> s32`
+  (`audio/ogg_vorbis`, portable); `VorbisInspectComments([]u8, *VorbisInfo,
+  *VorbisComments)` also copies the comment header
+- `VorbisDecoderOpen(*VorbisDecoder, input:[]u8, max_frames:s64) -> s32`, or
+  `VorbisDecoderOpenFile(*VorbisDecoder, path, max_frames)`, which reads the
+  file (at most 256 MiB) into the decoder
+- `VorbisDecoderRead(*VorbisDecoder, []float32, frames:*s64)` and
+  `VorbisDecoderReadS16(*VorbisDecoder, []s16, frames:*s64)`: interleaved
+  chunks of whole frames
+- `VorbisDecoderSeek(*VorbisDecoder, frame:s64)`, `VorbisDecoderRewind`, and
+  the idempotent `VorbisDecoderClose`
+- `VorbisDecode([]u8, max_frames, *PCM)` and
+  `VorbisDecodeS16([]u8, max_frames, *Vec(s16), *VorbisInfo)`: whole file
+- `VorbisDecodeResampled([]u8, max_frames, rate, *PCM)`
+  (`audio/vorbis_resample`): whole file through `audio/resample`'s best sinc
+- `VorbisVendor`, `VorbisCommentCount`, `VorbisComment(*VorbisComments,
+  index)` and `VorbisCommentValue(*VorbisComments, field)`, which matches the
+  field name without regard to ASCII case; an open decoder holds its
+  stream's comments in `decoder.comments`
+
+`VorbisInfo` gives channels, rate, exact PCM `frames`, the header's nominal,
+maximum and minimum bitrate hints (0 when unset), the short and long block
+sizes, the mode count, audio `packets`, the comment count and `end_trim`;
+`VorbisSeconds` converts frames to seconds. `frames` is the final granule
+position, which trims the last packet, so the duration is exact without
+decoding; libvorbisfile's `ov_pcm_total` agrees on every fixture.
+
+Inspection reads the whole stream before stb_vorbis sees it, because
+stb_vorbis checks neither page CRCs nor serial numbers. `audio/ogg`'s reader
+checks every page (capture, CRC, one serial, sequence, BOS/EOS, lacing).
+The identification header must be a 30-byte version-0 header on its own BOS
+page; the comment header's vendor, comments and framing bit must fit its
+packet; the setup header must end its page. The mode table is read
+backwards from the setup header's framing bit, as FFmpeg's and liboggz's
+parsers do, so every audio packet's block size, and with it each page's
+granule position, is checked: the timeline must start at zero, and the
+final granule may only trim frames that were decoded. Truncation (even one
+byte), CRC errors, trailing bytes, non-audio packets and granule mismatches
+are `Malformed`; chained or multiplexed streams (a second beginning-of-stream
+page), a timeline not starting at zero, more than two channels and rates
+outside 8000–192000 Hz are `Unsupported`. Floor 0 streams (pre-2004
+encoders) fail to open in stb_vorbis and return `Malformed`. A decoder that
+ends before the final granule position fails the read with `Malformed`.
+
+Reads behave like `DecoderRead`: caller-owned interleaved scratch of whole
+frames, `OK` with zero frames at the logical end, and a failed read may have
+filled a prefix. `ziran_vorbis_read` keeps decoding past frames that return
+no samples, which stb_vorbis' own interleaved reader treats as the end. S16
+samples are the float output through `Pcm16`, as for MP3. Seeks land on the
+exact requested frame: stb_vorbis bisects the pages for the one holding it,
+then decodes forward from the packet before, so the samples after a seek
+are bit-identical to a linear decode. Input bytes are borrowed until close.
+Live decoders have one owner and must not be copied or shared across
+threads. For streaming at another rate, pass `VorbisDecoderRead` chunks to
+`SincOpen`/`SincProcess`.
+
 ## Incremental APIs and ownership
 
 `DecoderOpen(*Decoder, input:[]u8, max_frames:s64) -> s32` validates the
@@ -224,14 +314,15 @@ only the explicit state APIs stream PCM.
 
 The manifest pins the codec sources as `source = true` dependencies:
 `libopus` (xiph/opus v1.5.2), `libsamplerate` (libsndfile/libsamplerate
-0.2.2) and `dr_libs` (mackron/dr_libs, dr_mp3 0.7.5). An NDK CMake build
-includes `native/AudioCodecs.cmake` and calls
-`ziran_audio_codecs("<libopus>" "<libsamplerate>")` and
-`ziran_audio_mp3("<dr_libs>")` with the paths from `ziran pkg path NAME`.
-They define static, position-independent `opus`, `samplerate` and
-`ziran_mp3` targets (float API; no programs, tests or DNN extensions) to
-link into the app's native library. `native/CMakeLists.txt` builds whichever
-of `OPUS_DIR`+`SAMPLERATE_DIR` and `DR_LIBS_DIR` it is given. Generate the
+0.2.2), `dr_libs` (mackron/dr_libs, dr_mp3 0.7.5) and `stb` (nothings/stb,
+stb_vorbis 1.24). An NDK CMake build includes `native/AudioCodecs.cmake` and
+calls `ziran_audio_codecs("<libopus>" "<libsamplerate>")`,
+`ziran_audio_mp3("<dr_libs>")` and `ziran_audio_vorbis("<stb>")` with the
+paths from `ziran pkg path NAME`. They define static, position-independent
+`opus`, `samplerate`, `ziran_mp3` and `ziran_vorbis` targets (float API; no
+programs, tests or DNN extensions) to link into the app's native library.
+`native/CMakeLists.txt` builds whichever of `OPUS_DIR`+`SAMPLERATE_DIR`,
+`DR_LIBS_DIR` and `STB_DIR` it is given. Generate the
 app's C with `--target-os android` and `--target-cpu` (`arm64`, `x64`, or
 `none` for 32-bit ABIs) plus Breeze's Android defines, `--define
 ANDROID_BUILD` and the ABI's `__aarch64__`, `__arm__`, `__i386__` or
@@ -244,35 +335,39 @@ NDK 28.2.13676358 at API 21 for arm64-v8a, armeabi-v7a, x86 and x86_64
 (`ANDROID_NDK_HOME`, `ANDROID_API` and `ANDROID_ABIS` override this). With
 `ANDROID_SERIAL=SERIAL` it runs inspect, decode, resample and encode on that
 device and compares the output with the Linux CLI, including the nine MP3
-fixtures (inspect and decode) and an MP3 resampled to 48 kHz. On a Moto e6
-play (armeabi-v7a, Android 9), decoded and resampled PCM16 matched Linux
-exactly, MP3 included, and the device-encoded stream decoded on Linux at the
-source duration. The other three ABIs are build-tested only. Native
-consumers link `libziran_mp3.a` from `ziran_audio_mp3` with `-lm`.
+and six Vorbis fixtures (inspect and decode) and an MP3 and a Vorbis stream
+resampled to 48 kHz. On a Moto e6 play (armeabi-v7a, Android 9), decoded and
+resampled PCM16 matched Linux exactly, MP3 and Vorbis included, and the
+device-encoded stream decoded on Linux at the source duration. The other three ABIs are build-tested only. Native
+consumers link `libziran_mp3.a` from `ziran_audio_mp3` and
+`libziran_vorbis.a` from `ziran_audio_vorbis` with `-lm`.
 
 ## Windows
 
-The same recipe builds static `libopus.a`, `libsamplerate.a` and
-`libziran_mp3.a` for x86_64 MinGW. With the pinned sources from `ziran pkg path`:
+The same recipe builds static `libopus.a`, `libsamplerate.a`,
+`libziran_mp3.a` and `libziran_vorbis.a` for x86_64 MinGW. With the pinned
+sources from `ziran pkg path`:
 
 ```sh
 cmake -S native -B build/windows/native -DCMAKE_SYSTEM_NAME=Windows \
     -DCMAKE_SYSTEM_PROCESSOR=AMD64 -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc \
     -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY -DCMAKE_BUILD_TYPE=Release \
     -DOPUS_DIR="$(ziran pkg path libopus)" -DSAMPLERATE_DIR="$(ziran pkg path libsamplerate)" \
-    -DDR_LIBS_DIR="$(ziran pkg path dr_libs)"
+    -DDR_LIBS_DIR="$(ziran pkg path dr_libs)" -DSTB_DIR="$(ziran pkg path stb)"
 cmake --build build/windows/native
 ```
 
 The archives are `build/windows/native/libopus/libopus.a`,
-`build/windows/native/libsamplerate/src/libsamplerate.a` and
-`build/windows/native/libziran_mp3.a` (a CMake consumer calls
-`ziran_audio_codecs`/`ziran_audio_mp3` and links the `opus`/`ziran_mp3`
-targets). Generate C with
+`build/windows/native/libsamplerate/src/libsamplerate.a`,
+`build/windows/native/libziran_mp3.a` and
+`build/windows/native/libziran_vorbis.a` (a CMake consumer calls
+`ziran_audio_codecs`/`ziran_audio_mp3`/`ziran_audio_vorbis` and links the
+`opus`/`ziran_mp3`/`ziran_vorbis` targets). Generate C with
 `--define _WIN32 --define __x86_64__`; no other define is needed. libopus
 keeps its default stack protector and `_FORTIFY_SOURCE=2`, so a MinGW link
 adds GCC's `-lssp` after the archives: decoder-only consumers link
-`libopus.a -lssp -lm` (plus `libziran_mp3.a` before it for MP3),
+`libopus.a -lssp -lm` (plus `libziran_mp3.a` and `libziran_vorbis.a`
+before it for MP3 and Vorbis),
 full-pipeline consumers `libopus.a libsamplerate.a -lssp -lm`. With `-static -static-libgcc` the programs import only
 `kernel32`, `msvcrt` and `advapi32`.
 
@@ -285,7 +380,10 @@ CLI. The decoder-only program streams nine mono/stereo fixtures through
 MP3 fixtures the same way through `Mp3DecoderRead`, also requires a
 mid-stream `Mp3DecoderSeek` and a rewind to reproduce the first pass, and
 rejects a truncated MP3; their inspection lines and PCM16 matched Linux
-bit-exactly. Its Opus inspection
+bit-exactly. The six Vorbis fixtures take the same path through
+`VorbisDecoderRead` and `VorbisDecoderSeek`, and a truncated Vorbis file is
+rejected; their inspection and comment lines and PCM16 matched Linux
+bit-exactly too. Its Opus inspection
 lines, five malformed-stream rejections and decoded frame counts matched
 Linux; PCM16 differed by at most 2 LSBs against the system libopus build
 (3 of 9 bit-exact). The full-pipeline program encoded `voice.wav` with the
@@ -343,9 +441,29 @@ s16 reads equal the whole-file decode; seeks forward and back on an 8-second
 garbage, silence, text, WAV, tags alone, free format, mid-stream tags and
 mono/stereo changes are rejected, and 600 corrupted-payload decodes return a
 status without crashing. `tests/portable.zi` checks inspection of synthetic
-streams in the `.zx` engine and Go. `make sanitize-test` runs the native
-contracts with dr_mp3 (assertions on) and the generated C under
-AddressSanitizer and UndefinedBehaviorSanitizer.
+streams in the `.zx` engine and Go.
+
+Vorbis tests (`tests/vorbis_contracts.zi`, run by the native contracts)
+decode the committed FFmpeg/libvorbis fixtures in `tests/fixtures/vorbis`
+(44.1 kHz stereo and mono, 22.05 kHz, 48 kHz, and a 32 kHz stream with
+title, artist and UTF-8 comments; the README there lists the commands)
+against FFmpeg's own PCM16 decode over the frames both hold: at most 1 PCM16
+step and 0.35 steps RMS; measured, at most 0.501 steps (the reference's own
+rounding) and 0.29 RMS. Lengths equal the final granule positions, which
+ffprobe and libvorbisfile also report; FFmpeg's own decode ends up to a block
+away from them. Irregular streamed chunks, rewinds and s16 reads equal the
+whole-file decode, and seeks forward and back on an 8-second stream and two
+short ones (into the end-trimmed tail too) return bit-identical samples.
+Comments read back verbatim and by field name. Truncation, garbage, silence,
+text, WAV, a CRC error, trailing bytes and synthetic streams with a timeline
+offset, six channels, a 4 kHz rate, a granule past the decoded frames or no
+audio are rejected; chained streams are `Unsupported`; an Ogg Opus stream is
+not Vorbis and still inspects as Opus; and 600 decodes of fixtures with
+corrupted setup-header or audio bytes behind refreshed CRCs return a status
+without crashing. `tests/portable.zi` checks Vorbis inspection of a synthetic
+stream in the `.zx` engine and Go. `make sanitize-test` runs the native
+contracts with dr_mp3 and stb_vorbis (assertions on) and the generated C
+under AddressSanitizer and UndefinedBehaviorSanitizer.
 
 References: [Opus public API 1.5](https://www.opus-codec.org/docs/opus_api-1.5.pdf),
 [RFC 7845 Ogg Opus](https://www.rfc-editor.org/rfc/rfc7845.html),

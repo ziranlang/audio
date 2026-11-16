@@ -1,6 +1,7 @@
 #import "types"
 #import "opus"
 #import "resample"
+#import "vorbis"
 #program_export
 Codec :: () -> s32 {
     encoder: Encoder
@@ -13,5 +14,13 @@ Sinc :: () -> s32 {
     state: SincState
     code := SincOpen(*state, 1, 44100, 48000)
     SincClose(*state)
+    return code
+}
+#program_export
+Vorbis :: () -> s32 {
+    decoder: VorbisDecoder
+    input: [4]u8
+    code := VorbisDecoderOpen(*decoder, input[:], 1)
+    VorbisDecoderClose(*decoder)
     return code
 }

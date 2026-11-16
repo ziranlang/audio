@@ -4,6 +4,8 @@
 #import "wav"
 #import "mpeg_audio"
 #import "mpeg_fixture"
+#import "ogg_vorbis"
+#import "vorbis_fixture"
 #program_export
 main :: () -> s32 {
     bytes: Vec(u8)
@@ -46,6 +48,17 @@ main :: () -> s32 {
     short: Vec(u8)
     if !Mp3Synthetic(*short, 4, 5, false, true, false) { return 16 }
     if Mp3Inspect(VecSlice(short, 0, short.count), *mp3) != Malformed { return 17 }
+    // Ogg Vorbis inspection is portable too: headers, comments, block sizes
+    // from the setup header's mode table and granule checks.
+    modes: [5]u8 = .[1, 0, 0, 1, 1]
+    vorbis: Vec(u8)
+    if !VorbisSynthetic(*vorbis, 1, 22050, modes[:], 0, 300) { return 18 }
+    vorbis_info: VorbisInfo
+    comments: VorbisComments
+    if VorbisInspectComments(VecSlice(vorbis, 0, vorbis.count), *vorbis_info, *comments) != OK || vorbis_info.frames != VorbisSyntheticFrames(modes[:]) - 300 || vorbis_info.modes != 2 || vorbis_info.rate != 22050 || vorbis_info.end_trim != 300 { return 19 }
+    if VorbisCommentValue(*comments, "title") != "synthetic" || VorbisVendor(*comments) != "ziran" || VorbisCommentCount(*comments) != 1 { return 20 }
+    vorbis[vorbis.count - 1] ^= 1
+    if VorbisInspect(VecSlice(vorbis, 0, vorbis.count), *vorbis_info) != Malformed || vorbis_info.frames != 0 { return 21 }
     print("portable audio contracts passed\n")
     return 0
 }
