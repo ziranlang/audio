@@ -2,6 +2,8 @@
 #import "std/vec"
 #import "ogg"
 #import "wav"
+#import "mpeg_audio"
+#import "mpeg_fixture"
 #program_export
 main :: () -> s32 {
     bytes: Vec(u8)
@@ -29,6 +31,21 @@ main :: () -> s32 {
     decoded: PCM
     if WavDecode(VecSlice(bytes, 0, bytes.count), 3, *decoded) != OK || decoded.samples.count != 3 { return 8 }
     for i: 0..2 { if decoded.samples[i] != pcm.samples[i] { return 9 } }
+    // MPEG audio inspection is portable: tags, Info/LAME trims, frame walk.
+    stream: Vec(u8)
+    if !Mp3Synthetic(*stream, 5, 5, true, true, true) { return 10 }
+    mp3: Mp3Info
+    if Mp3Inspect(VecSlice(stream, 0, stream.count), *mp3) != OK || mp3.version != 1 || mp3.layer != 3 || mp3.channels != 2 || mp3.rate != 44100 { return 11 }
+    if mp3.frames != 5 * 1152 - Mp3SyntheticDelay - Mp3SyntheticPadding || mp3.mp3_frames != 5 || mp3.bitrate != 128000 || mp3.vbr || mp3.audio_at != 30 { return 12 }
+    // Cutting one byte of the last frame (behind the ID3v1 tag) is truncation.
+    if Mp3Inspect(VecSlice(stream, 0, stream.count - 129), *mp3) != Malformed || mp3.frames != 0 { return 13 }
+    plain: Vec(u8)
+    if !Mp3Synthetic(*plain, 4, 0, false, false, false) { return 14 }
+    if Mp3Inspect(VecSlice(plain, 0, plain.count), *mp3) != OK || mp3.frames != 4 * 1152 || mp3.delay != 0 || mp3.audio_end != plain.count { return 15 }
+    // An Info frame declaring more frames than follow it is truncation.
+    short: Vec(u8)
+    if !Mp3Synthetic(*short, 4, 5, false, true, false) { return 16 }
+    if Mp3Inspect(VecSlice(short, 0, short.count), *mp3) != Malformed { return 17 }
     print("portable audio contracts passed\n")
     return 0
 }

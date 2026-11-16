@@ -6,6 +6,7 @@
 #import "resample"
 #import "wav"
 #import "std/math"
+#import "mp3_contracts"
 
 test_opus :: #system_library "opus";
 TestControl :: (state: *void, request: s32, arguments: ..any) -> s32 #foreign test_opus "opus_encoder_ctl";
@@ -135,5 +136,5 @@ main :: () -> s32 {
     if stream.count != filtered.samples.count { print("stream length % expected %\n", stream.count, filtered.samples.count); return 26 }
     for i: 0..stream.count - 1 { if (cast(float64)stream[i] - cast(float64)filtered.samples[i]) > 0.000001 || (cast(float64)filtered.samples[i] - cast(float64)stream[i]) > 0.000001 { return 27 } }
     print("native audio contracts passed; % logical frames, alias mean square %\n", info.frames, energy / 14000.0)
-    return 0
+    return Mp3Contracts()
 }

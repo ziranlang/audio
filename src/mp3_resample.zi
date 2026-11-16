@@ -1,0 +1,21 @@
+// Whole-file MP3 decode converted to another rate with audio/resample's best
+// sinc. Kept apart from audio/mp3 so decode-only consumers need no
+// libsamplerate; streaming callers feed Mp3DecoderRead chunks to SincProcess.
+#import "types"
+#import "mp3"
+#import "resample"
+
+// OUTPUT holds float PCM at RATE (8000..192000), or the decoded PCM itself
+// when the stream is already at RATE. OUTPUT is unchanged on an error.
+Mp3DecodeResampled :: (input: []u8, max_frames: s64, rate: s32, output: *PCM) -> s32 {
+    if rate < 8000 || rate > 192000 { return Invalid }
+    decoded: PCM
+    code := Mp3Decode(input, max_frames, *decoded)
+    if code != OK { return code }
+    if decoded.rate == rate {
+        output.rate = rate; output.channels = decoded.channels
+        SwapSamples(output, *decoded.samples)
+        return OK
+    }
+    return Resample(*decoded, rate, output)
+}

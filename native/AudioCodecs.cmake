@@ -1,9 +1,12 @@
-# Static libopus and libsamplerate recipe for native consumers (Android NDK and
-# other cross builds). Sources are this package's pinned `libopus` and
-# `libsamplerate` source dependencies (`ziran pkg path NAME`).
+# Static libopus, libsamplerate and MP3 decoder recipe for native consumers
+# (Linux, Android NDK, Windows MinGW and other cross builds). Sources are this
+# package's pinned `libopus`, `libsamplerate` and `dr_libs` source
+# dependencies (`ziran pkg path NAME`).
 #   include("<audio-package>/native/AudioCodecs.cmake")
 #   ziran_audio_codecs("<libopus-source>" "<libsamplerate-source>")
-# Defines static, position-independent targets `opus` and `samplerate`.
+#   ziran_audio_mp3("<dr_libs-source>")
+# Defines static, position-independent targets `opus`, `samplerate` and
+# `ziran_mp3`. Each function is independent; call only what is linked.
 include_guard(GLOBAL)
 
 function(ziran_audio_codecs opus_dir samplerate_dir)
@@ -33,4 +36,19 @@ function(ziran_audio_codecs opus_dir samplerate_dir)
         target_compile_options("${codec_target}" PRIVATE -ffunction-sections -fdata-sections)
         set_target_properties("${codec_target}" PROPERTIES POSITION_INDEPENDENT_CODE ON)
     endforeach()
+endfunction()
+
+# dr_mp3 is a single header; ziran_mp3.c is its one implementation unit plus
+# the decoder-state calls audio/mp3 binds. Link `libziran_mp3.a` (and `-lm`).
+function(ziran_audio_mp3 dr_libs_dir)
+    if(TARGET ziran_mp3)
+        message(FATAL_ERROR "ziran_audio_mp3: ziran_mp3 target already exists")
+    endif()
+    if(NOT EXISTS "${dr_libs_dir}/dr_mp3.h" OR NOT EXISTS "${dr_libs_dir}/LICENSE")
+        message(FATAL_ERROR "No dr_libs source at ${dr_libs_dir}")
+    endif()
+    add_library(ziran_mp3 STATIC "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/ziran_mp3.c")
+    target_include_directories(ziran_mp3 PRIVATE "${dr_libs_dir}")
+    target_compile_options(ziran_mp3 PRIVATE -ffunction-sections -fdata-sections)
+    set_target_properties(ziran_mp3 PROPERTIES POSITION_INDEPENDENT_CODE ON C_STANDARD 99)
 endfunction()

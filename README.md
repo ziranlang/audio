@@ -1,15 +1,18 @@
 # Audio for Ziran
 
-Reusable Opus encoding/decoding, Ogg Opus inspection, best-quality sinc
-sample-rate conversion and WAV I/O, with a native `audio` command. There is
+Reusable Opus encoding/decoding, MP3 decoding, Ogg Opus and MPEG audio
+inspection, best-quality sinc sample-rate conversion and WAV I/O, with a
+native `audio` command. There is
 no Kryon, Raylib, audio-device or runtime subprocess dependency. GUI hosts
 choose their own playback sink and call the same modules as command-line tools.
 
 ## Build and use
 
-Install Ziran plus the development/link libraries for **libopus** and
+Install Ziran, CMake plus the development/link libraries for **libopus** and
 **libsamplerate** (`libopus-dev` and `libsamplerate0-dev` on Debian-family
-Linux), then run:
+Linux). The MP3 decoder is compiled from the pinned `dr_libs` source: `make`
+builds `build/native/linux/libziran_mp3.a` through `native/CMakeLists.txt`
+before the CLI. Then run:
 
 ```sh
 make
@@ -20,16 +23,29 @@ build/bin/audio inspect output.opus
 build/bin/audio decode output.opus decoded.wav
 build/bin/audio transcode input.opus smaller.opus --bitrate 32000
 build/bin/audio resample input.wav speech.wav --rate 16000
+build/bin/audio inspect song.mp3
+build/bin/audio decode song.mp3 song.wav
+build/bin/audio resample song.mp3 song-48k.wav --rate 48000
+```
+
+Formats are chosen from the content, not the file name: `OggS` is Ogg
+Opus, `RIFF` is WAV, anything else is read as MPEG audio. `inspect` on an
+MP3 prints the MPEG version and layer, channels, rate, exact frames and
+duration, bitrate, VBR or CBR, the LAME delay/padding and the frame count:
+
+```text
+MP3: MPEG-1 Layer III, 2 channels, 44100 Hz, 13230 frames, 0.300 s, 128000 bps CBR, delay 1105, padding 641, 13 MPEG frames
 ```
 
 The CLI supports PCM16 and IEEE float32 RIFF WAV input, and mapping-family-0
 Ogg Opus (mono/stereo) with the exact 19-byte version-1 identification header.
 Other Opus header versions/extensions are outside this bounded profile.
-Decoded WAV output is PCM16 at 48 kHz. `resample`
+Decoded Opus WAV output is PCM16 at 48 kHz; decoded MP3 WAV output is
+PCM16 at the stream's own rate. `resample`
 accepts either format and writes PCM16 WAV at the requested 8000–192000 Hz
 rate. `transcode` decodes WAV/Opus and encodes Opus; it is a lossy re-encode
-when its source is already Opus. Other audio formats belong to separate
-modules; existing `std/vorbis` and `std/vorbis_linux` support is independent.
+when its source is already Opus or MP3. Other audio formats belong to
+separate modules; existing `std/vorbis` and `std/vorbis_linux` support is independent.
 
 Encoder options are `--bitrate` in bits/second (6000–510000), `--vbr`
 `on|off|constrained`, `--bandwidth` `auto|narrow|wide|superwide|full`,
@@ -66,11 +82,15 @@ not play audio or open audio devices.
 ## Callable modules
 
 Exports are `audio/types`, `audio/ogg`, `audio/wav`, `audio/opus`,
-`audio/resample` and `audio/pipeline`.
+`audio/resample`, `audio/pipeline`, `audio/mpeg_audio`, `audio/mp3` and
+`audio/mp3_resample`.
 Full-pipeline native consumers declare `links = ["opus", "samplerate", "m"]` in their
 root manifest's `[package]` table, or use equivalent linker flags in a custom
 host. Ziran does not inherit system links from dependencies. Codec-only consumers need
 only `links = ["opus", "m"]`; `audio/opus` does not import the resampler.
+MP3 decode-only consumers link `libziran_mp3.a` and `-lm`
+(`links = ["ziran_mp3", "m"]` with the archive's directory in `LDFLAGS`);
+`audio/mp3_resample` adds `samplerate`. `audio/mpeg_audio` is portable.
 
 ```zi
 Types :: #import "audio/types"
@@ -109,6 +129,64 @@ and incremental decode instead permit up to 24 hours at 48 kHz, without
 allocating full PCM. Ogg packets/comments are bounded to 65536 bytes. These
 limits are explicit capability boundaries, including on otherwise valid input.
 
+## MP3
+
+`audio/mp3` decodes MPEG-1, MPEG-2 and MPEG-2.5 audio, Layers I, II and III,
+mono and stereo, through [dr_mp3](https://github.com/mackron/dr_libs) (public
+domain or MIT-0; its `LICENSE` is in the pinned source). The manifest pins
+`dr_libs` at commit `f12e197fd462e4c22873fbd70d11b1d2f2c1dc3c` (dr_mp3 0.7.5)
+as a `source = true` dependency. `native/ziran_mp3.c` is dr_mp3's one
+implementation unit, built with float output and no stdio, plus two calls
+that size and free the native decoder state. Redistributors ship dr_libs'
+`LICENSE` alongside the binary as they do libopus' `COPYING`.
+
+- `Mp3Inspect([]u8, *Mp3Info) -> s32` (`audio/mpeg_audio`, portable)
+- `Mp3DecoderOpen(*Mp3Decoder, input:[]u8, max_frames:s64) -> s32`, or
+  `Mp3DecoderOpenFile(*Mp3Decoder, path, max_frames)`, which reads the file
+  (at most 256 MiB) into the decoder
+- `Mp3DecoderRead(*Mp3Decoder, []float32, frames:*s64)` and
+  `Mp3DecoderReadS16(*Mp3Decoder, []s16, frames:*s64)`: interleaved chunks
+  of whole frames
+- `Mp3DecoderSeek(*Mp3Decoder, frame:s64)`, `Mp3DecoderRewind`, and the
+  idempotent `Mp3DecoderClose`
+- `Mp3Decode([]u8, max_frames, *PCM)` and
+  `Mp3DecodeS16([]u8, max_frames, *Vec(s16), *Mp3Info)`: whole file
+- `Mp3DecodeResampled([]u8, max_frames, rate, *PCM)` (`audio/mp3_resample`):
+  whole file through `audio/resample`'s best sinc
+
+`Mp3Info` gives the MPEG version (1, 2 or 25) and layer, channels, rate,
+exact PCM `frames`, `mp3_frames`, `frame_samples`, LAME `delay`/`padding`,
+`bitrate` (nominal for CBR, average for VBR), `vbr`, and the frame byte range;
+`Mp3Seconds` converts frames to seconds. With a Xing/Info header the frame
+count is its declared frames times the frame length less the LAME encoder
+delay (+529) and padding (−529), so duration is exact without decoding, as
+FFmpeg trims it; without one it is the walked frames times the frame length.
+VBR is a Xing or VBRI header or a bitrate change between frames.
+
+Inspection walks every frame header before dr_mp3 sees the bytes. It skips
+leading ID3v2 tags (several, with footers) and trailing ID3v1 and APEv2 tags,
+then requires complete frames that keep the first frame's version, layer,
+rate and channel count, optionally followed by zero padding. A partial last
+frame, fewer frames than a Xing header declares, junk between frames, a
+mono/stereo or rate change (`Unsupported`), free-format frames
+(`Unsupported`) and non-MPEG input are rejected; dr_mp3 is then opened over
+just the validated frame bytes. A decoder that ends before the declared frame
+count fails the read with `Malformed`. Lyrics3 tags and mid-stream tags are
+outside this bounded profile.
+
+Reads behave like `DecoderRead`: caller-owned interleaved scratch of whole
+frames, `OK` with zero frames at the logical end, and a failed read may have
+filled a prefix. S16 samples are the float output through `Pcm16` (clip to
+[-1, 32767/32768], scale by 32768, truncate), the same PCM16 boundary
+`WavEncode` uses, so they equal the CLI's decoded WAV. Seeks
+land on the exact requested frame: the decoder binds a seek table of about
+one point per second (at most 16384) at open, starts up to 16 frames before
+the target and decodes forward, so the samples after a seek are bit-identical
+to a linear decode. Input bytes are borrowed until close, as for Opus. Live
+decoders have one owner and must not be copied or shared across threads.
+For streaming at another rate, pass `Mp3DecoderRead` chunks to
+`SincOpen`/`SincProcess`.
+
 ## Incremental APIs and ownership
 
 `DecoderOpen(*Decoder, input:[]u8, max_frames:s64) -> s32` validates the
@@ -145,46 +223,57 @@ only the explicit state APIs stream PCM.
 ## Android
 
 The manifest pins the codec sources as `source = true` dependencies:
-`libopus` (xiph/opus v1.5.2) and `libsamplerate` (libsndfile/libsamplerate
-0.2.2). An NDK CMake build includes `native/AudioCodecs.cmake` and calls
-`ziran_audio_codecs("<libopus>" "<libsamplerate>")` with the paths from
-`ziran pkg path libopus` / `ziran pkg path libsamplerate`. It defines static,
-position-independent `opus` and `samplerate` targets (float API; no programs,
-tests or DNN extensions) to link into the app's native library. Generate the
-app's C with Breeze's Android defines, `--define ANDROID_BUILD` plus the ABI's
-`__aarch64__`, `__arm__`, `__i386__` or `__x86_64__`; `std` file mapping and
-renames need them on bionic.
+`libopus` (xiph/opus v1.5.2), `libsamplerate` (libsndfile/libsamplerate
+0.2.2) and `dr_libs` (mackron/dr_libs, dr_mp3 0.7.5). An NDK CMake build
+includes `native/AudioCodecs.cmake` and calls
+`ziran_audio_codecs("<libopus>" "<libsamplerate>")` and
+`ziran_audio_mp3("<dr_libs>")` with the paths from `ziran pkg path NAME`.
+They define static, position-independent `opus`, `samplerate` and
+`ziran_mp3` targets (float API; no programs, tests or DNN extensions) to
+link into the app's native library. `native/CMakeLists.txt` builds whichever
+of `OPUS_DIR`+`SAMPLERATE_DIR` and `DR_LIBS_DIR` it is given. Generate the
+app's C with `--target-os android` and `--target-cpu` (`arm64`, `x64`, or
+`none` for 32-bit ABIs) plus Breeze's Android defines, `--define
+ANDROID_BUILD` and the ABI's `__aarch64__`, `__arm__`, `__i386__` or
+`__x86_64__`. `std` file mapping and renames select bionic's calls from the
+target OS; without it a 32-bit build calls `mmap` with a 64-bit offset and
+every input fails to map.
 
 `make android-test` (after `make test`) builds both libraries and the CLI with
 NDK 28.2.13676358 at API 21 for arm64-v8a, armeabi-v7a, x86 and x86_64
 (`ANDROID_NDK_HOME`, `ANDROID_API` and `ANDROID_ABIS` override this). With
 `ANDROID_SERIAL=SERIAL` it runs inspect, decode, resample and encode on that
-device and compares the output with the Linux CLI. On a Moto e6 play
-(armeabi-v7a, Android 9), decoded and resampled PCM16 matched Linux exactly
-and the device-encoded stream decoded on Linux at the source duration. The
-other three ABIs are build-tested only.
+device and compares the output with the Linux CLI, including the nine MP3
+fixtures (inspect and decode) and an MP3 resampled to 48 kHz. On a Moto e6
+play (armeabi-v7a, Android 9), decoded and resampled PCM16 matched Linux
+exactly, MP3 included, and the device-encoded stream decoded on Linux at the
+source duration. The other three ABIs are build-tested only. Native
+consumers link `libziran_mp3.a` from `ziran_audio_mp3` with `-lm`.
 
 ## Windows
 
-The same recipe builds static `libopus.a` and `libsamplerate.a` for
-x86_64 MinGW. With the pinned sources from `ziran pkg path`:
+The same recipe builds static `libopus.a`, `libsamplerate.a` and
+`libziran_mp3.a` for x86_64 MinGW. With the pinned sources from `ziran pkg path`:
 
 ```sh
 cmake -S native -B build/windows/native -DCMAKE_SYSTEM_NAME=Windows \
     -DCMAKE_SYSTEM_PROCESSOR=AMD64 -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc \
     -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY -DCMAKE_BUILD_TYPE=Release \
-    -DOPUS_DIR="$(ziran pkg path libopus)" -DSAMPLERATE_DIR="$(ziran pkg path libsamplerate)"
+    -DOPUS_DIR="$(ziran pkg path libopus)" -DSAMPLERATE_DIR="$(ziran pkg path libsamplerate)" \
+    -DDR_LIBS_DIR="$(ziran pkg path dr_libs)"
 cmake --build build/windows/native
 ```
 
-The archives are `build/windows/native/libopus/libopus.a` and
-`build/windows/native/libsamplerate/src/libsamplerate.a` (a CMake consumer
-calls `ziran_audio_codecs` and links the `opus` target). Generate C with
+The archives are `build/windows/native/libopus/libopus.a`,
+`build/windows/native/libsamplerate/src/libsamplerate.a` and
+`build/windows/native/libziran_mp3.a` (a CMake consumer calls
+`ziran_audio_codecs`/`ziran_audio_mp3` and links the `opus`/`ziran_mp3`
+targets). Generate C with
 `--define _WIN32 --define __x86_64__`; no other define is needed. libopus
 keeps its default stack protector and `_FORTIFY_SOURCE=2`, so a MinGW link
 adds GCC's `-lssp` after the archives: decoder-only consumers link
-`libopus.a -lssp -lm`, full-pipeline consumers `libopus.a libsamplerate.a
--lssp -lm`. With `-static -static-libgcc` the programs import only
+`libopus.a -lssp -lm` (plus `libziran_mp3.a` before it for MP3),
+full-pipeline consumers `libopus.a libsamplerate.a -lssp -lm`. With `-static -static-libgcc` the programs import only
 `kernel32`, `msvcrt` and `advapi32`.
 
 `make windows-test` (after `make test`; `WINDOWS_CC` names the compiler)
@@ -192,7 +281,11 @@ builds both archives and two codec programs, then runs them in a private
 Wine prefix under a private Xvfb display and compares them with the Linux
 CLI. The decoder-only program streams nine mono/stereo fixtures through
 `DecoderOpen`/`DecoderRead` in 997-frame chunks, rewinds with
-`DecoderRewind` and requires an identical second pass. Its inspection
+`DecoderRewind` and requires an identical second pass. It streams the nine
+MP3 fixtures the same way through `Mp3DecoderRead`, also requires a
+mid-stream `Mp3DecoderSeek` and a rewind to reproduce the first pass, and
+rejects a truncated MP3; their inspection lines and PCM16 matched Linux
+bit-exactly. Its Opus inspection
 lines, five malformed-stream rejections and decoded frame counts matched
 Linux; PCM16 differed by at most 2 LSBs against the system libopus build
 (3 of 9 bit-exact). The full-pipeline program encoded `voice.wav` with the
@@ -237,6 +330,22 @@ libopus decoder (within 1 PCM16 LSB). FFmpeg's independent decoder also checks
 duration and the CELT sine fixtures; SILK/resampler implementations can differ
 without a container timing error. No listening score or universal compression
 quality claim follows from these tests.
+
+MP3 tests (`tests/mp3_contracts.zi`, run by the native contracts) decode the
+committed FFmpeg/libmp3lame fixtures in `tests/fixtures/mp3` (CBR, Xing VBR,
+mono, 22.05 kHz MPEG-2, 11.025 kHz MPEG-2.5, no Xing header, Layer II and
+ID3v2+ID3v1 tags; the README there lists the commands) against FFmpeg's own
+PCM16 decode: at most 1.5 PCM16 steps and 0.5 steps RMS. Measured, Layer III
+differs by at most 0.505 steps (the reference's own rounding) and Layer II by
+1.04. Durations equal FFmpeg's exactly. Irregular streamed chunks, rewinds and
+s16 reads equal the whole-file decode; seeks forward and back on an 8-second
+32 kbps stream return bit-identical samples. One-byte and larger truncation,
+garbage, silence, text, WAV, tags alone, free format, mid-stream tags and
+mono/stereo changes are rejected, and 600 corrupted-payload decodes return a
+status without crashing. `tests/portable.zi` checks inspection of synthetic
+streams in the `.zx` engine and Go. `make sanitize-test` runs the native
+contracts with dr_mp3 (assertions on) and the generated C under
+AddressSanitizer and UndefinedBehaviorSanitizer.
 
 References: [Opus public API 1.5](https://www.opus-codec.org/docs/opus_api-1.5.pdf),
 [RFC 7845 Ogg Opus](https://www.rfc-editor.org/rfc/rfc7845.html),

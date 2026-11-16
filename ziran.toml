@@ -2,7 +2,7 @@
 name = "audio"
 module_roots = ["src"]
 entry = "src/audio.zi"
-links = ["opus", "samplerate", "m"]
+links = ["ziran_mp3", "opus", "samplerate", "m"]
 
 [toolchain]
 git = "https://github.com/ziranlang/ziran.git"
@@ -15,8 +15,12 @@ wav = "src/wav.zi"
 opus = "src/opus.zi"
 pipeline = "src/pipeline.zi"
 resample = "src/resample.zi"
+mpeg_audio = "src/mpeg_audio.zi"
+mp3 = "src/mp3.zi"
+mp3_resample = "src/mp3_resample.zi"
 
-# Pinned native sources for platform builds (Android NDK); see native/.
+# Pinned native sources for platform builds; see native/. dr_libs supplies
+# dr_mp3 (public domain or MIT-0), compiled into libziran_mp3.a.
 [dependencies.libopus]
 git = "https://github.com/xiph/opus.git"
 ref = "ddbe48383984d56acd9e1ab6a090c54ca6b735a6"
@@ -25,4 +29,9 @@ source = true
 [dependencies.libsamplerate]
 git = "https://github.com/libsndfile/libsamplerate.git"
 ref = "c96f5e3de9c4488f4e6c97f59f5245f22fda22f7"
+source = true
+
+[dependencies.dr_libs]
+git = "https://github.com/mackron/dr_libs.git"
+ref = "f12e197fd462e4c22873fbd70d11b1d2f2c1dc3c"
 source = true

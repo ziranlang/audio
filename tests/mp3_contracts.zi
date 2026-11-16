@@ -1,0 +1,275 @@
+// Native MP3 contracts over tests/fixtures/mp3 (see its README for the
+// FFmpeg commands that made them): decode against FFmpeg's reference PCM,
+// exact durations, streaming = whole-file output, exact seeks, and errors
+// (never crashes) for truncated, corrupted, garbage and non-MP3 input.
+// Run from the package root.
+#import "types"
+#import "std/vec"
+#import "std/file"
+#import "std/byte_text_linux"
+#import "wav"
+#import "mpeg_audio"
+#import "mp3"
+#import "mp3_resample"
+#import "mpeg_fixture"
+
+#scope_file
+// Largest decoder difference against FFmpeg's PCM16 reference, in PCM16
+// steps, and the largest RMS difference. The reference itself is rounded to
+// 16 bits (0.5 steps); measured: Layer III 0.505, Layer II 1.04 steps.
+ToleranceSteps :: 1.5
+ToleranceRms :: 0.5
+Fail :: (code: s32, name: string) -> s32 { print("mp3 contract % failed: %\n", code, name); return code }
+// Fixture paths are built in caller-owned bytes, so sanitizer runs see no
+// retained strings.
+PathInto :: (path: *Vec(u8), name: string, extension: string) {
+    parts: [4]string = .["tests/fixtures/mp3/", name, ".", extension]
+    for part: parts { for i: cast(s64)0..part.count - 1 { unused VecPush(<<path, part[i]) } }
+}
+Load :: (name: string, extension: string, bytes: *Vec(u8)) -> bool {
+    path: Vec(u8)
+    PathInto(*path, name, extension)
+    return ReadFileInto(TextFromBytes(VecSlice(path, 0, path.count)), bytes)
+}
+Same :: (a: []float32, b: []float32) -> bool {
+    if a.count != b.count { return false }
+    for i: cast(s64)0..a.count - 1 { if a[i] != b[i] { return false } }
+    return true
+}
+// Reads the rest of the stream in irregular chunks into OUTPUT.
+Stream :: (decoder: *Mp3Decoder, output: *Vec(float32)) -> s32 {
+    sizes: [5]s64 = .[997, 1, 1152, 4093, 7]
+    scratch: [8186]float32
+    channels := cast(s64)decoder.info.channels
+    turn: s64
+    while true {
+        frames: s64
+        code := Mp3DecoderRead(decoder, scratch[0:sizes[turn % 5] * channels], *frames)
+        if code != OK { return code }
+        if frames == 0 { return OK }
+        for i: cast(s64)0..frames * channels - 1 { if !VecPush(<<output, scratch[i]) { return AllocationFailed } }
+        turn += 1
+    }
+    return OK
+}
+Random :: (state: *u64) -> u8 {
+    <<state = <<state * 6364136223846793005 + 1442695040888963407
+    return cast(u8)(<<state >> 56)
+}
+Fixtures :: () -> s32 {
+    names: [8]string = .["cbr", "vbr", "mono", "mpeg2", "mpeg25", "noxing", "layer2", "id3"]
+    rates: [8]s32 = .[44100, 44100, 32000, 22050, 11025, 44100, 48000, 44100]
+    channels: [8]s32 = .[2, 2, 1, 2, 1, 2, 2, 1]
+    versions: [8]s32 = .[1, 1, 1, 2, 25, 1, 1, 1]
+    layers: [8]s32 = .[3, 3, 3, 3, 3, 3, 2, 3]
+    bitrates: [8]s32 = .[128000, 0, 64000, 64000, 16000, 128000, 192000, 96000]
+    delays: [8]bool = .[true, true, true, true, true, false, false, true]
+    for index: 0..7 {
+        name := names[index]
+        extension := ifx layers[index] == 2 then "mp2" else "mp3"
+        bytes: Vec(u8)
+        reference_bytes: Vec(u8)
+        if !Load(name, extension, *bytes) || !Load(name, "wav", *reference_bytes) { return Fail(100, name) }
+        input := VecSlice(bytes, 0, bytes.count)
+        reference: PCM
+        if WavDecode(VecSlice(reference_bytes, 0, reference_bytes.count), MaxFrames, *reference) != OK { return Fail(101, name) }
+        info: Mp3Info
+        if Mp3Inspect(input, *info) != OK { return Fail(102, name) }
+        // Duration: Xing/Info frame counts less the LAME delay and padding,
+        // or the walked frames, equal FFmpeg's decoded length exactly.
+        if info.rate != rates[index] || info.channels != channels[index] || info.version != versions[index] || info.layer != layers[index] { return Fail(103, name) }
+        if info.frames != reference.samples.count / reference.channels || reference.rate != info.rate { print("% frames % reference %\n", name, info.frames, reference.samples.count / reference.channels); return Fail(104, name) }
+        if info.vbr != (bitrates[index] == 0) || (bitrates[index] != 0 && info.bitrate != bitrates[index]) || info.bitrate < 8000 { return Fail(105, name) }
+        if (info.delay > 0) != delays[index] { return Fail(106, name) }
+        // Whole-file float decode against the reference within tolerance.
+        decoded: PCM
+        if Mp3Decode(input, info.frames - 1, *decoded) != LimitExceeded || decoded.samples.count != 0 { return Fail(107, name) }
+        if Mp3Decode(input, MaxFrames, *decoded) != OK || decoded.rate != info.rate || decoded.channels != info.channels || decoded.samples.count != reference.samples.count { return Fail(108, name) }
+        worst: float64; squares: float64
+        for i: cast(s64)0..decoded.samples.count - 1 {
+            difference := (cast(float64)decoded.samples[i] - cast(float64)reference.samples[i]) * 32768.0
+            if difference < 0.0 { difference = -difference }
+            if difference > worst { worst = difference }
+            squares += difference * difference
+        }
+        mean_square := squares / cast(float64)decoded.samples.count
+        if worst > ToleranceSteps || mean_square > ToleranceRms * ToleranceRms { print("% worst % mean square %\n", name, worst, mean_square); return Fail(109, name) }
+        print("mp3 %: % frames at % Hz, % bps, max difference % PCM16 steps, mean square % against FFmpeg\n", name, info.frames, info.rate, info.bitrate, worst, mean_square)
+        // Streaming in irregular chunks matches the whole-file samples, and
+        // so does a rewind followed by a second pass.
+        decoder: Mp3Decoder
+        if Mp3DecoderOpen(*decoder, input, MaxFrames) != OK { return Fail(110, name) }
+        streamed: Vec(float32)
+        if Stream(*decoder, *streamed) != OK || !Same(VecSlice(streamed, 0, streamed.count), VecSlice(decoded.samples, 0, decoded.samples.count)) { Mp3DecoderClose(*decoder); return Fail(111, name) }
+        if Mp3DecoderRewind(*decoder) != OK { Mp3DecoderClose(*decoder); return Fail(112, name) }
+        again: Vec(float32)
+        if Stream(*decoder, *again) != OK || !Same(VecSlice(again, 0, again.count), VecSlice(streamed, 0, streamed.count)) { Mp3DecoderClose(*decoder); return Fail(113, name) }
+        // Interleaved s16 is the float output through the PCM16 boundary.
+        if Mp3DecoderRewind(*decoder) != OK { Mp3DecoderClose(*decoder); return Fail(114, name) }
+        shorts: [666]s16
+        at: s64
+        while true {
+            frames: s64
+            if Mp3DecoderReadS16(*decoder, shorts[0:333 * cast(s64)info.channels], *frames) != OK { Mp3DecoderClose(*decoder); return Fail(115, name) }
+            if frames == 0 { break }
+            for i: cast(s64)0..frames * info.channels - 1 {
+                if shorts[i] != Pcm16(cast(float64)decoded.samples[at + i]) { Mp3DecoderClose(*decoder); return Fail(116, name) }
+            }
+            at += frames * info.channels
+        }
+        Mp3DecoderClose(*decoder); Mp3DecoderClose(*decoder)
+        if at != decoded.samples.count { return Fail(117, name) }
+        whole: Vec(s16)
+        whole_info: Mp3Info
+        if Mp3DecodeS16(input, MaxFrames, *whole, *whole_info) != OK || whole.count != at || whole_info.frames != info.frames { return Fail(118, name) }
+        // Truncation, including one byte, is an error; the ID3 fixture's
+        // last byte belongs to its ID3v1 tag, which then becomes junk.
+        cuts: [6]s64 = .[1, 2, 57, bytes.count / 2 + 3, bytes.count - 4, bytes.count - 1]
+        for cut: cuts {
+            code := Mp3Decode(VecSlice(bytes, 0, bytes.count - cut), MaxFrames, *decoded)
+            if code == OK && (cut == 1 || delays[index]) { print("% cut %\n", name, cut); return Fail(119, name) }
+            if code != OK && code != Malformed && code != Unsupported { return Fail(120, name) }
+        }
+    }
+    return OK
+}
+// Exact seeks: after a seek the decoder returns the very samples a linear
+// decode has at that frame, forward and backward, on a long low-bitrate
+// stream (whose bit reservoir spans frames) and on a short one.
+Seeks :: (name: string, expected_frames: s64) -> s32 {
+    bytes: Vec(u8)
+    if !Load(name, "mp3", *bytes) { return Fail(200, name) }
+    input := VecSlice(bytes, 0, bytes.count)
+    linear: PCM
+    if Mp3Decode(input, MaxFrames, *linear) != OK { return Fail(201, name) }
+    channels := cast(s64)linear.channels
+    frames := linear.samples.count / channels
+    if frames != expected_frames { print("% decoded % frames\n", name, frames); return Fail(202, name) }
+    decoder: Mp3Decoder
+    if Mp3DecoderOpen(*decoder, input, MaxFrames) != OK { return Fail(203, name) }
+    defer { Mp3DecoderClose(*decoder) }
+    if decoder.info.frames != frames { return Fail(204, name) }
+    targets: [14]s64 = .[frames / 2, 1, 575, 576, 577, 1151, 1152, 12345, frames - 1000, frames - 1, 17, 0, frames / 3, frames]
+    scratch: [1024]float32
+    for target: targets {
+        if target < 0 || target > frames { continue }
+        if Mp3DecoderSeek(*decoder, target) != OK || decoder.position != target { return Fail(205, name) }
+        got: s64
+        if Mp3DecoderRead(*decoder, scratch[0:512 * channels], *got) != OK { return Fail(206, name) }
+        wanted := frames - target
+        if wanted > 512 { wanted = 512 }
+        if got != wanted { return Fail(207, name) }
+        for i: cast(s64)0..got * channels - 1 {
+            if scratch[i] != linear.samples[target * channels + i] { print("% seek % differs at sample %\n", name, target, i); return Fail(208, name) }
+        }
+    }
+    if Mp3DecoderSeek(*decoder, frames + 1) != Invalid || Mp3DecoderSeek(*decoder, -1) != Invalid { return Fail(209, name) }
+    return OK
+}
+Errors :: () -> s32 {
+    decoder: Mp3Decoder
+    scratch: [4]float32
+    frames: s64
+    if Mp3DecoderRead(*decoder, scratch[:], *frames) != Invalid || Mp3DecoderSeek(*decoder, 0) != Invalid { return Fail(300, "closed decoder") }
+    Mp3DecoderClose(*decoder)
+    // Garbage, silence, text and other formats never reach a decoded frame.
+    state: u64 = 12345
+    sizes: [8]s64 = .[0, 1, 3, 4, 10, 417, 4096, 65536]
+    for size: sizes {
+        noise: Vec(u8)
+        for i: cast(s64)0..size - 1 { if !VecPush(noise, Random(*state)) { return Fail(301, "noise") } }
+        pcm: PCM
+        if Mp3Decode(VecSlice(noise, 0, noise.count), MaxFrames, *pcm) == OK { return Fail(302, "noise") }
+        zeros: Vec(u8)
+        if !VecResize(zeros, size) { return Fail(303, "zeros") }
+        if Mp3Decode(VecSlice(zeros, 0, zeros.count), MaxFrames, *pcm) != Malformed { return Fail(304, "zeros") }
+    }
+    text := "this is not an MP3 file at all, just text."
+    prose: Vec(u8)
+    for i: 0..text.count - 1 { if !VecPush(prose, text[i]) { return Fail(322, "text") } }
+    info: Mp3Info
+    if Mp3Inspect(VecSlice(prose, 0, prose.count), *info) != Malformed { return Fail(305, "text") }
+    wav: Vec(u8)
+    if !Load("cbr", "wav", *wav) || Mp3Inspect(VecSlice(wav, 0, wav.count), *info) != Malformed { return Fail(306, "wav") }
+    // A tag alone, a tag claiming more bytes than exist, free format, a
+    // mono stream followed by a stereo one's frames, and a tag between them.
+    tag: [10]u8 = .[73, 68, 51, 3, 0, 0, 0, 0, 0, 0]
+    if Mp3Inspect(tag[:], *info) != Malformed { return Fail(307, "tag only") }
+    tag[9] = 100
+    if Mp3Inspect(tag[:], *info) != Malformed { return Fail(308, "oversized tag") }
+    free: [8]u8 = .[255, 251, 0, 0, 255, 251, 0, 0]
+    if Mp3Inspect(free[:], *info) != Unsupported { return Fail(309, "free format") }
+    mono: Vec(u8)
+    stereo: Vec(u8)
+    if !Load("mono", "mp3", *mono) || !Load("cbr", "mp3", *stereo) { return Fail(310, "mixed") }
+    tagged := mono.count
+    for byte: VecSlice(stereo, 0, stereo.count) { if !VecPush(mono, byte) { return Fail(311, "mixed") } }
+    if Mp3Inspect(VecSlice(mono, 0, mono.count), *info) != Malformed { return Fail(312, "tag between streams") }
+    if Mp3Inspect(VecSlice(stereo, 0, stereo.count), *info) != OK { return Fail(313, "mixed") }
+    unused VecResize(mono, tagged)
+    for byte: VecSlice(stereo, info.audio_at, info.audio_end) { if !VecPush(mono, byte) { return Fail(314, "mixed") } }
+    if Mp3Inspect(VecSlice(mono, 0, mono.count), *info) != Unsupported { return Fail(315, "mixed") }
+    // Corrupted payload bytes reach dr_mp3; it must return a result (any
+    // status) without crashing, and an OK decode keeps the declared length.
+    names: [3]string = .["cbr", "vbr", "layer2"]
+    for name: names {
+        bytes: Vec(u8)
+        extension := ifx name == "layer2" then "mp2" else "mp3"
+        if !Load(name, extension, *bytes) || Mp3Inspect(VecSlice(bytes, 0, bytes.count), *info) != OK { return Fail(316, name) }
+        for trial: cast(s64)0..199 {
+            corrupt: Vec(u8)
+            for byte: VecSlice(bytes, 0, bytes.count) { if !VecPush(corrupt, byte) { return Fail(317, name) } }
+            for flip: cast(s64)0..3 {
+                position := info.audio_at + (trial * 7919 + flip * 104729) % (info.audio_end - info.audio_at)
+                corrupt[position] ^= Random(*state) | 1
+            }
+            pcm: PCM
+            corrupt_info: Mp3Info
+            code := Mp3Decode(VecSlice(corrupt, 0, corrupt.count), MaxFrames, *pcm)
+            if code == OK && (Mp3Inspect(VecSlice(corrupt, 0, corrupt.count), *corrupt_info) != OK || pcm.samples.count != corrupt_info.frames * corrupt_info.channels) { return Fail(318, name) }
+        }
+    }
+    // Synthetic silent frames decode to exactly the trimmed length.
+    synthetic: Vec(u8)
+    if !Mp3Synthetic(*synthetic, 5, 5, true, true, true) { return Fail(319, "synthetic") }
+    silent: PCM
+    if Mp3Decode(VecSlice(synthetic, 0, synthetic.count), MaxFrames, *silent) != OK || silent.samples.count != (5 * 1152 - Mp3SyntheticDelay - Mp3SyntheticPadding) * 2 { return Fail(320, "synthetic") }
+    for value: VecSlice(silent.samples, 0, silent.samples.count) { if value != 0.0 { return Fail(321, "synthetic") } }
+    return OK
+}
+Files :: () -> s32 {
+    decoder: Mp3Decoder
+    if Mp3DecoderOpenFile(*decoder, "tests/fixtures/mp3/missing.mp3", MaxFrames) != IOFailure || decoder.handle != null { return Fail(400, "missing file") }
+    path: Vec(u8)
+    PathInto(*path, "vbr", "mp3")
+    vbr_path := TextFromBytes(VecSlice(path, 0, path.count))
+    if Mp3DecoderOpenFile(*decoder, vbr_path, MaxFrames) != OK { return Fail(401, "vbr file") }
+    if Mp3DecoderOpenFile(*decoder, vbr_path, MaxFrames) != Invalid { Mp3DecoderClose(*decoder); return Fail(402, "reopen") }
+    streamed: Vec(float32)
+    code := Stream(*decoder, *streamed)
+    Mp3DecoderClose(*decoder)
+    bytes: Vec(u8)
+    pcm: PCM
+    if code != OK || !Load("vbr", "mp3", *bytes) || Mp3Decode(VecSlice(bytes, 0, bytes.count), MaxFrames, *pcm) != OK { return Fail(403, "vbr file") }
+    if !Same(VecSlice(streamed, 0, streamed.count), VecSlice(pcm.samples, 0, pcm.samples.count)) { return Fail(404, "vbr file") }
+    // Resampling through audio/resample's sinc, and the same-rate path.
+    resampled: PCM
+    if Mp3DecodeResampled(VecSlice(bytes, 0, bytes.count), MaxFrames, 48000, *resampled) != OK || resampled.rate != 48000 || resampled.channels != 2 { return Fail(405, "resample") }
+    frames := resampled.samples.count / 2
+    if frames < 14399 || frames > 14401 { return Fail(406, "resample") }
+    same: PCM
+    if Mp3DecodeResampled(VecSlice(bytes, 0, bytes.count), MaxFrames, 44100, *same) != OK || !Same(VecSlice(same.samples, 0, same.samples.count), VecSlice(pcm.samples, 0, pcm.samples.count)) { return Fail(407, "resample") }
+    if Mp3DecodeResampled(VecSlice(bytes, 0, bytes.count), MaxFrames, 7999, *same) != Invalid { return Fail(408, "resample") }
+    return OK
+}
+
+#scope_export
+Mp3Contracts :: () -> s32 {
+    code := Fixtures()
+    if code == OK { code = Seeks("long", 176400) }
+    if code == OK { code = Seeks("cbr", 13230) }
+    if code == OK { code = Errors() }
+    if code == OK { code = Files() }
+    if code == OK { print("native MP3 contracts passed: 8 fixtures within % PCM16 steps (RMS %), exact seeks, malformed input rejected\n", ToleranceSteps, ToleranceRms) }
+    return code
+}

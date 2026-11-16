@@ -1,15 +1,81 @@
-// Decoder-only Windows check, linked with libopus alone like Kryon's playback:
-// `inspect IN`, `decode IN OUT.wav` and `reject IN` mirror the Linux CLI.
-// Decode streams through DecoderOpen/DecoderRead in irregular chunks, then
-// rewinds and requires the second pass to be identical before writing WAV.
+// Decoder-only Windows check, linked with libopus and libziran_mp3 like
+// Kryon's playback: `inspect IN`, `decode IN OUT.wav` and `reject IN` mirror
+// the Linux CLI, choosing Ogg Opus or MP3 from the content as it does.
+// Decode streams through DecoderOpen/DecoderRead (Mp3DecoderOpen/Read) in
+// irregular chunks, then rewinds and requires the second pass to be
+// identical before writing WAV.
 #import "types"
 #import "opus"
 #import "ogg"
 #import "wav"
+#import "mpeg_audio"
+#import "mp3"
 #import "std/vec"
 #import "std/file"
 #import "std/byte_text_linux"
 
+// The MP3 half of main: the same commands and output over audio/mp3.
+Mp3Command :: (command: string, input: []u8, argc: s32, argv: **u8) -> s32 {
+    if command == "inspect" {
+        info: Mp3Info
+        code := Mp3Inspect(input, *info)
+        if code != OK { print("%\n", ErrorText(code)); return code }
+        Mp3PrintInfo(*info)
+        return 0
+    }
+    decoder: Mp3Decoder
+    code := Mp3DecoderOpen(*decoder, input, MaxFrames)
+    if command == "reject" {
+        Mp3DecoderClose(*decoder)
+        print("%\n", ErrorText(code))
+        if code == OK { return 1 }
+        return 0
+    }
+    if command != "decode" || argc != 4 { Mp3DecoderClose(*decoder); return Invalid }
+    if code != OK { print("%\n", ErrorText(code)); return code }
+    defer { Mp3DecoderClose(*decoder) }
+    channels := cast(s64)decoder.info.channels
+    pcm: PCM
+    pcm.rate = decoder.info.rate; pcm.channels = decoder.info.channels
+    if decoder.info.frames > MaxFrames || !VecResize(pcm.samples, decoder.info.frames * channels) { return LimitExceeded }
+    scratch: [1994]float32
+    at: s64
+    while true {
+        frames: s64
+        code = Mp3DecoderRead(*decoder, scratch[0:997 * channels], *frames)
+        if code != OK { print("%\n", ErrorText(code)); return code }
+        if frames == 0 { break }
+        for i: cast(s64)0..frames * channels - 1 { pcm.samples[at * channels + i] = scratch[i] }
+        at += frames
+    }
+    // A seek to the middle, then a rewind, reproduce the first pass exactly.
+    middle := at / 2
+    if Mp3DecoderSeek(*decoder, middle) != OK { print("seek failed\n"); return NativeFailure }
+    frames: s64
+    code = Mp3DecoderRead(*decoder, scratch[0:997 * channels], *frames)
+    if code != OK { print("%\n", ErrorText(code)); return code }
+    for i: cast(s64)0..frames * channels - 1 {
+        if scratch[i] != pcm.samples[middle * channels + i] { print("seek differs at frame %\n", middle); return Malformed }
+    }
+    if Mp3DecoderRewind(*decoder) != OK { print("rewind failed\n"); return NativeFailure }
+    again: s64
+    while true {
+        code = Mp3DecoderRead(*decoder, scratch[0:channels], *frames)
+        if code != OK { print("%\n", ErrorText(code)); return code }
+        if frames == 0 { break }
+        for i: cast(s64)0..channels - 1 {
+            if scratch[i] != pcm.samples[again * channels + i] { print("rewind differs at frame %\n", again); return Malformed }
+        }
+        again += 1
+    }
+    if again != at { print("rewind decoded % of % frames\n", again, at); return Malformed }
+    output: Vec(u8)
+    code = WavEncode(*pcm, *output)
+    if code != OK { print("%\n", ErrorText(code)); return code }
+    if !WriteEntireFile(TextFromCString(argv[3]), TextFromBytes(VecSlice(output, 0, output.count))) { print("input/output failed\n"); return IOFailure }
+    print("decoded and rewound % frames\n", at)
+    return 0
+}
 #program_export
 main :: (argc: s32, argv: **u8) -> s32 {
     if argc < 3 { print("windows_decode inspect|decode|reject INPUT [OUTPUT.wav]\n"); return Invalid }
@@ -17,6 +83,7 @@ main :: (argc: s32, argv: **u8) -> s32 {
     bytes: Vec(u8)
     if !ReadFileInto(TextFromCString(argv[2]), *bytes) { print("input/output failed\n"); return IOFailure }
     input := VecSlice(bytes, 0, bytes.count)
+    if !Magic(input, 0, "OggS") { return Mp3Command(command, input, argc, argv) }
     if command == "inspect" {
         info: Info
         code := Inspect(input, *info)

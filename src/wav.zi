@@ -66,8 +66,7 @@ WavEncode :: (pcm: *PCM, output: *Vec(u8)) -> s32 {
         for i: cast(s64)0..count - 1 {
             value := cast(float64)pcm.samples[i]
             if value - value != 0.0 { return Invalid }
-            if value < -1.0 { value = -1.0 }; if value > 32767.0 / 32768.0 { value = 32767.0 / 32768.0 }
-            PutLittle(data, 44 + i * 2, 2, cast(u64)cast(s64)(value * 32768.0))
+            PutLittle(data, 44 + i * 2, 2, cast(u64)cast(s64)Pcm16(value))
         }
     }
     VecSwap(bytes, <<output); return OK

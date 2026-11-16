@@ -2,7 +2,8 @@
 set -eu
 cd "$(dirname "$0")/.."
 ZIRAN=${ZIRAN:-ziran}
-export LDLIBS='-lopus -lsamplerate -lm'
+# `make test` first builds libziran_mp3.a (dr_mp3) into build/native/linux.
+export LDLIBS="-L$(pwd)/build/native/linux -lziran_mp3 -lopus -lsamplerate -lm"
 mkdir -p build/tests
 python3 - <<'PYDOC'
 from pathlib import Path

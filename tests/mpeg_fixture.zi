@@ -1,0 +1,49 @@
+// Synthetic MPEG-1 Layer III streams for the portable and native tests:
+// silent 128 kbps, 44.1 kHz stereo frames, optionally behind a 30-byte
+// ID3v2 tag and a LAME-style Info frame (encoder delay 576, padding 1000,
+// so 1105 and 471 trimmed frames), and optionally followed by an ID3v1 tag.
+#import "std/vec"
+
+#scope_file
+Push :: (bytes: *Vec(u8), value: s32) -> bool { return VecPush(<<bytes, cast(u8)value) }
+PushText :: (bytes: *Vec(u8), text: string) -> bool {
+    for i: 0..text.count - 1 { if !Push(bytes, cast(s32)text[i]) { return false } }
+    return true
+}
+// 1152 * 128000 / 8 / 44100 = 417 bytes, 418 with the padding slot.
+PushFrame :: (bytes: *Vec(u8), padded: bool) -> bool {
+    if !Push(bytes, 255) || !Push(bytes, 251) || !Push(bytes, ifx padded then 146 else 144) || !Push(bytes, 0) { return false }
+    for i: 4..ifx padded then 417 else 416 { if !Push(bytes, 0) { return false } }
+    return true
+}
+
+#scope_export
+Mp3SyntheticDelay :: 1105
+Mp3SyntheticPadding :: 471
+// FRAMES audio frames; with INFO the Info frame declares DECLARED of them.
+Mp3Synthetic :: (bytes: *Vec(u8), frames: s32, declared: s32, id3v2: bool, info: bool, id3v1: bool) -> bool {
+    if id3v2 {
+        if !PushText(bytes, "ID3") { return false }
+        header: [7]u8 = .[3, 0, 0, 0, 0, 0, 20]
+        for value: header { if !Push(bytes, cast(s32)value) { return false } }
+        for i: 1..20 { if !Push(bytes, 0) { return false } }
+    }
+    if info {
+        start := (<<bytes).count
+        if !PushFrame(bytes, false) { return false }
+        tag: Vec(u8)
+        if !PushText(*tag, "Info") || !Push(*tag, 0) || !Push(*tag, 0) || !Push(*tag, 0) || !Push(*tag, 1) { return false }
+        if !Push(*tag, (declared >> 24) & 255) || !Push(*tag, (declared >> 16) & 255) || !Push(*tag, (declared >> 8) & 255) || !Push(*tag, declared & 255) { return false }
+        if !PushText(*tag, "LAME3.100") { return false }
+        for i: 9..20 { if !Push(*tag, 0) { return false } }
+        // 12-bit encoder delay 576 and padding 1000.
+        if !Push(*tag, 36) || !Push(*tag, 3) || !Push(*tag, 232) { return false }
+        for i: 0..tag.count - 1 { (<<bytes)[start + 36 + i] = tag[i] }
+    }
+    for i: 1..frames { if !PushFrame(bytes, i % 3 == 0) { return false } }
+    if id3v1 {
+        if !PushText(bytes, "TAG") { return false }
+        for i: 1..125 { if !Push(bytes, 0) { return false } }
+    }
+    return true
+}

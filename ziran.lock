@@ -11,6 +11,15 @@
       "url": "https://github.com/libsndfile/libsamplerate.git"
     },
     {
+      "commit": "f12e197fd462e4c22873fbd70d11b1d2f2c1dc3c",
+      "dependencies": {},
+      "id": "pb7c2dd1c09da0c1c",
+      "name": "dr_libs",
+      "ref": "f12e197fd462e4c22873fbd70d11b1d2f2c1dc3c",
+      "source": true,
+      "url": "https://github.com/mackron/dr_libs.git"
+    },
+    {
       "commit": "ddbe48383984d56acd9e1ab6a090c54ca6b735a6",
       "dependencies": {},
       "id": "pe1fe9bbe80bf1d6d",
@@ -21,12 +30,12 @@
     }
   ],
   "root": {
-    "dependencies": {"libopus": "pe1fe9bbe80bf1d6d", "libsamplerate": "p0dd67588478f9a3e"},
-    "dependency_refs": {"libopus": "ddbe48383984d56acd9e1ab6a090c54ca6b735a6", "libsamplerate": "c96f5e3de9c4488f4e6c97f59f5245f22fda22f7"},
+    "dependencies": {"dr_libs": "pb7c2dd1c09da0c1c", "libopus": "pe1fe9bbe80bf1d6d", "libsamplerate": "p0dd67588478f9a3e"},
+    "dependency_refs": {"dr_libs": "f12e197fd462e4c22873fbd70d11b1d2f2c1dc3c", "libopus": "ddbe48383984d56acd9e1ab6a090c54ca6b735a6", "libsamplerate": "c96f5e3de9c4488f4e6c97f59f5245f22fda22f7"},
     "name": "audio"
   },
   "toolchain": {
-    "commit": "897a37b0afa826362a62dae8072b71f502d91f7b",
+    "commit": "7acf793845985264820b5546699a08719cc1c275",
     "ref": "master",
     "url": "https://github.com/ziranlang/ziran.git"
   }
