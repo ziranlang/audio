@@ -2,9 +2,8 @@
 set -eu
 cd "$(dirname "$0")/.."
 ZIRAN=${ZIRAN:-ziran}
-# `make test` first builds libziran_mp3.a (dr_mp3) and libziran_vorbis.a
-# (stb_vorbis) into build/native/linux.
-export LDLIBS="-L$(pwd)/build/native/linux -lziran_mp3 -lziran_vorbis -lopus -lsamplerate -lm"
+# `make test` builds the core MP3 archive; Vorbis uses libvorbisfile.
+export LDLIBS="-L$(pwd)/build/native/linux -lziran_mp3 -lvorbisfile -lvorbis -logg -lopus -lsamplerate -lm"
 mkdir -p build/tests
 python3 - <<'PYDOC'
 from pathlib import Path
@@ -41,7 +40,7 @@ for entry in Codec Sinc Vorbis; do
     if "$ZIRAN" bundle --root tests --module-path src --entry "native_only:$entry" -o build/tests/native.zx tests/native_only.zi >build/tests/rejection.log 2>&1; then
         echo "native $entry unexpectedly bundled without its capability" >&2; exit 1
     fi
-    rg 'foreign|capability|native|unsupported' build/tests/rejection.log >/dev/null
+    rg 'foreign|capability|native|unsupported|no portable lowered representation' build/tests/rejection.log >/dev/null
 done
 ZIRAN="$ZIRAN" python3 tests/package.py
 printf '%s\n' 'audio source/saved native, portable VM/Go and independent interoperability local tests passed'

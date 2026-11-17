@@ -1,5 +1,5 @@
 #!/bin/sh
-# Android NDK build of the pinned libopus/libsamplerate/dr_libs/stb sources
+# Android NDK build of the pinned libopus/libsamplerate and core MP3/Vorbis sources
 # and the audio CLI for every ABI Breeze ships, then (with ANDROID_SERIAL) a
 # device run that decodes, inspects, resamples and encodes the `make test`
 # fixtures and the committed MP3 and Vorbis fixtures and checks them against
@@ -17,8 +17,7 @@ test -f "$toolchain" || { echo "Android NDK not found at $ndk (set ANDROID_NDK_H
 bin=$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin
 opus=$("$ZIRAN" pkg path libopus --offline)
 samplerate=$("$ZIRAN" pkg path libsamplerate --offline)
-dr_libs=$("$ZIRAN" pkg path dr_libs --offline)
-stb=$("$ZIRAN" pkg path stb --offline)
+ziran_root=$("$ZIRAN" pkg path ziran --offline)
 fixtures=build/tests/fixtures
 mp3s="cbr.mp3 vbr.mp3 mono.mp3 mpeg2.mp3 mpeg25.mp3 noxing.mp3 id3.mp3 layer2.mp2 long.mp3"
 # Vorbis copies are prefixed: mono and long also name MP3 fixtures.
@@ -41,18 +40,18 @@ for abi in $abis; do
     mkdir -p "$out"
     "$CMAKE" -S native -B "$out/native" -DCMAKE_TOOLCHAIN_FILE="$toolchain" \
         -DANDROID_ABI="$abi" -DANDROID_PLATFORM="android-$api" -DCMAKE_BUILD_TYPE=Release \
-        -DOPUS_DIR="$opus" -DSAMPLERATE_DIR="$samplerate" -DDR_LIBS_DIR="$dr_libs" -DSTB_DIR="$stb" >"$out/cmake.log"
+        -DOPUS_DIR="$opus" -DSAMPLERATE_DIR="$samplerate" -DZIRAN_STDLIB="$ziran_root/std" -DAUDIO_CORE_VORBIS=ON >"$out/cmake.log"
     "$CMAKE" --build "$out/native" --parallel 2 >>"$out/cmake.log"
     libopus=$(find "$out/native" -name libopus.a | head -n 1)
     libsamplerate=$(find "$out/native" -name libsamplerate.a | head -n 1)
     libmp3=$out/native/libziran_mp3.a
-    libvorbis=$out/native/libziran_vorbis.a
-    test -n "$libopus" && test -n "$libsamplerate" && test -f "$libmp3" && test -f "$libvorbis"
+    libvorbis="$out/native/libvorbisfile.a $out/native/libvorbis.a $out/native/libogg.a"
+    test -n "$libopus" && test -n "$libsamplerate" && test -f "$libmp3" && test -f "$out/native/libvorbisfile.a"
     CC="$bin/$triple$api-clang" CFLAGS="-O2 -Wno-parentheses-equality" LDLIBS="$libmp3 $libvorbis $libopus $libsamplerate -lm" \
         "$ZIRAN" build --target=c --exe --target-os android --target-cpu "$cpu" --define ANDROID_BUILD --define "$arch" \
         --root src --module-path src --entry audio:main -o "$out/bin" src/audio.zi
     file "$out/bin/audio" | grep -q 'ELF'
-    printf 'android %s: libopus, libsamplerate, libziran_mp3, libziran_vorbis and audio CLI built (API %s)\n' "$abi" "$api"
+    printf 'android %s: libopus, libsamplerate, libziran_mp3, core Vorbis and audio CLI built (API %s)\n' "$abi" "$api"
 done
 
 serial=${ANDROID_SERIAL:-}

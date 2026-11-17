@@ -1,6 +1,8 @@
 #import "types"
+#import "std/audio_types"
 #import "std/vec"
-#import "ogg"
+#import "ogg_opus"
+#import "std/ogg"
 #import "std/math"
 #scope_file
 opus :: #system_library "opus";

@@ -1,0 +1,75 @@
+// Ogg Opus packet duration and profile validation; the container is std/ogg.
+#import "std/audio_types"
+#import "std/ogg"
+#import "types"
+#import "std/audio_types"
+// RFC 6716 TOC duration at the Ogg timebase (48 kHz), independent of FFI.
+PacketFrames :: (packet: []u8) -> s32 {
+    if packet.count == 0 { return 0 }
+    toc := packet[0]
+    samples: s32
+    if (toc & 128) != 0 { samples = 120 << cast(s32)((toc >> 3) & 3) }
+    else if (toc & 96) == 96 { samples = ifx (toc & 8) != 0 then 960 else 480 }
+    else { samples = 480 << cast(s32)((toc >> 3) & 3); if samples == 3840 { samples = 2880 } }
+    count: s32 = 1
+    code := toc & 3
+    if code == 1 || code == 2 { count = 2 }
+    if code == 3 { if packet.count < 2 { return 0 }; count = cast(s32)(packet[1] & 63) }
+    if count == 0 || samples * count > 5760 { return 0 }
+    return samples * count
+}
+Inspect :: (input: []u8, info: *Info) -> s32 {
+    <<info = Info.{}
+    if input.count > MaxBytes { return LimitExceeded }
+    reader := OggReader.{.input = input}
+    metadata: Info
+    total: s64
+    previous_granule: s64
+    index: s64
+    while !reader.done {
+        code := NextPacket(*reader)
+        if code != OK { return code }
+        if reader.done { break }
+        packet := reader.packet[0:reader.packet_count]
+        if index == 0 {
+            if packet.count != 19 || !Magic(packet, 0, "OpusHead") { return Malformed }
+            if packet[8] != 1 || packet[18] != 0 { return Unsupported }
+            if packet[9] < 1 || packet[9] > 2 { return Unsupported }
+            if !reader.page_last || reader.flags != 2 || reader.granule != 0 { return Malformed }
+            metadata.channels = packet[9]; metadata.rate = 48000
+            metadata.pre_skip = cast(s32)Little(packet, 10, 2)
+            metadata.original_rate = cast(s32)Little(packet, 12, 4)
+            gain := cast(s32)Little(packet, 16, 2)
+            metadata.gain_q8 = ifx gain >= 32768 then gain - 65536 else gain
+        } else if index == 1 {
+            if packet.count < 16 || !Magic(packet, 0, "OpusTags") || reader.granule != 0 || !reader.page_last { return Malformed }
+            vendor := cast(s64)Little(packet, 8, 4)
+            if vendor > packet.count - 16 { return Malformed }
+            offset := 12 + vendor
+            comments := cast(s64)Little(packet, offset, 4); offset += 4
+            if comments > (packet.count - offset) / 4 { return Malformed }
+            for i: cast(s64)0..comments - 1 {
+                if packet.count - offset < 4 { return Malformed }
+                size := cast(s64)Little(packet, offset, 4); offset += 4
+                if size > packet.count - offset { return Malformed }; offset += size
+            }
+        } else {
+            frames := PacketFrames(packet)
+            if frames == 0 { return Malformed }
+            total += frames; metadata.packets += 1
+            if total > cast(s64)48000 * 86400 { return LimitExceeded }
+            if reader.last_complete {
+                granule := reader.granule
+                if granule < previous_granule || granule > total { return Malformed }
+                if (reader.flags & 4) == 0 && granule != total { return Unsupported }
+                // EOS may trim several packets on its final page (RFC 7845).
+                previous_granule = granule
+            }
+        }
+        index += 1
+    }
+    if index < 3 || previous_granule <= metadata.pre_skip { return Malformed }
+    metadata.frames = previous_granule - metadata.pre_skip
+    <<info = metadata
+    return OK
+}

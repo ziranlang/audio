@@ -11,15 +11,6 @@
       "url": "https://github.com/libsndfile/libsamplerate.git"
     },
     {
-      "commit": "f12e197fd462e4c22873fbd70d11b1d2f2c1dc3c",
-      "dependencies": {},
-      "id": "pb7c2dd1c09da0c1c",
-      "name": "dr_libs",
-      "ref": "f12e197fd462e4c22873fbd70d11b1d2f2c1dc3c",
-      "source": true,
-      "url": "https://github.com/mackron/dr_libs.git"
-    },
-    {
       "commit": "ddbe48383984d56acd9e1ab6a090c54ca6b735a6",
       "dependencies": {},
       "id": "pe1fe9bbe80bf1d6d",
@@ -27,25 +18,16 @@
       "ref": "ddbe48383984d56acd9e1ab6a090c54ca6b735a6",
       "source": true,
       "url": "https://github.com/xiph/opus.git"
-    },
-    {
-      "commit": "9600522de53973336fa033a289858a4354cbb04c",
-      "dependencies": {},
-      "id": "pe4a63e2d6e0424e7",
-      "name": "stb",
-      "ref": "9600522de53973336fa033a289858a4354cbb04c",
-      "source": true,
-      "url": "https://github.com/nothings/stb.git"
     }
   ],
   "root": {
-    "dependencies": {"dr_libs": "pb7c2dd1c09da0c1c", "libopus": "pe1fe9bbe80bf1d6d", "libsamplerate": "p0dd67588478f9a3e", "stb": "pe4a63e2d6e0424e7"},
-    "dependency_refs": {"dr_libs": "f12e197fd462e4c22873fbd70d11b1d2f2c1dc3c", "libopus": "ddbe48383984d56acd9e1ab6a090c54ca6b735a6", "libsamplerate": "c96f5e3de9c4488f4e6c97f59f5245f22fda22f7", "stb": "9600522de53973336fa033a289858a4354cbb04c"},
+    "dependencies": {"libopus": "pe1fe9bbe80bf1d6d", "libsamplerate": "p0dd67588478f9a3e"},
+    "dependency_refs": {"libopus": "ddbe48383984d56acd9e1ab6a090c54ca6b735a6", "libsamplerate": "c96f5e3de9c4488f4e6c97f59f5245f22fda22f7"},
     "name": "audio"
   },
   "toolchain": {
-    "commit": "7acf793845985264820b5546699a08719cc1c275",
-    "ref": "master",
+    "commit": "515449986e40fd9da7fb324f96cbf6d1c906a696",
+    "ref": "2313b49cb005610853faeec46447fc38578a2a15",
     "url": "https://github.com/ziranlang/ziran.git"
   }
 }

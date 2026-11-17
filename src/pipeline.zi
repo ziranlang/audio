@@ -1,8 +1,10 @@
 // Whole-buffer preprocessing and Ogg Opus encoding. Codec-only consumers
 // import opus without pulling in the sample-rate converter.
 #import "types"
+#import "std/audio_types"
 #import "std/vec"
-#import "ogg"
+#import "ogg_opus"
+#import "std/ogg"
 #import "opus"
 #import "resample"
 

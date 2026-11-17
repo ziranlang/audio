@@ -1,8 +1,8 @@
 // Whole-file MP3 decode converted to another rate with audio/resample's best
-// sinc. Kept apart from audio/mp3 so decode-only consumers need no
+// sinc. Kept apart from std/audio_mp3 so decode-only consumers need no
 // libsamplerate; streaming callers feed Mp3DecoderRead chunks to SincProcess.
-#import "types"
-#import "mp3"
+#import "std/audio_types"
+#import "std/audio_mp3"
 #import "resample"
 
 // OUTPUT holds float PCM at RATE (8000..192000), or the decoded PCM itself
