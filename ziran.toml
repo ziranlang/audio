@@ -5,8 +5,8 @@ entry = "src/audio.zi"
 links = ["ziran_mp3", "vorbisfile", "vorbis", "ogg", "opus", "samplerate", "m"]
 
 [toolchain]
-git = "https://github.com/ziranlang/ziran.git"
-ref = "2313b49cb005610853faeec46447fc38578a2a15"
+git = "https://git.waozi.xyz/ziranlang/ziran.git"
+ref = "5db3d3c39425d5dfe4bfe4a84e6f6e2e5a810ad0"
 
 [exports]
 types = "src/types.zi"

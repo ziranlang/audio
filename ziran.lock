@@ -26,8 +26,8 @@
     "name": "audio"
   },
   "toolchain": {
-    "commit": "515449986e40fd9da7fb324f96cbf6d1c906a696",
-    "ref": "2313b49cb005610853faeec46447fc38578a2a15",
-    "url": "https://github.com/ziranlang/ziran.git"
+    "commit": "5db3d3c39425d5dfe4bfe4a84e6f6e2e5a810ad0",
+    "ref": "5db3d3c39425d5dfe4bfe4a84e6f6e2e5a810ad0",
+    "url": "https://git.waozi.xyz/ziranlang/ziran.git"
   }
 }
