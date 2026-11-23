@@ -1,22 +1,24 @@
 // Decoder-only Windows check, linked with libopus, libziran_mp3 and
-// libziran_vorbis like Kryon's playback: `inspect IN`, `decode IN OUT.wav`
+// the core Xiph archives like Kryon's playback: `inspect IN`, `decode IN OUT.wav`
 // and `reject IN` mirror the Linux CLI, choosing Ogg Vorbis, Ogg Opus or MP3
 // from the content as it does. Decode streams through DecoderOpen/DecoderRead
 // (Mp3DecoderOpen/Read, VorbisDecoderOpen/Read) in irregular chunks, then
 // rewinds and requires the second pass to be identical before writing WAV.
 #import "types"
+#import "std/audio_types"
 #import "opus"
-#import "ogg"
-#import "wav"
-#import "mpeg_audio"
-#import "mp3"
-#import "ogg_vorbis"
-#import "vorbis"
+#import "ogg_opus"
+#import "std/ogg"
+#import "std/audio_wav"
+#import "std/audio_mpeg"
+#import "std/audio_mp3"
+#import "std/vorbis"
+#import "std/vorbis_linux"
 #import "std/vec"
 #import "std/file"
 #import "std/byte_text_linux"
 
-// The MP3 half of main: the same commands and output over audio/mp3.
+// The MP3 half of main: the same commands and output over std/audio_mp3.
 Mp3Command :: (command: string, input: []u8, argc: s32, argv: **u8) -> s32 {
     if command == "inspect" {
         info: Mp3Info
@@ -78,10 +80,10 @@ Mp3Command :: (command: string, input: []u8, argc: s32, argv: **u8) -> s32 {
     print("decoded and rewound % frames\n", at)
     return 0
 }
-// The Vorbis half of main, as for MP3 over audio/vorbis.
+// The Vorbis half of main, as for MP3 over std/vorbis_linux.
 VorbisCommand :: (command: string, input: []u8, argc: s32, argv: **u8) -> s32 {
     if command == "inspect" {
-        info: VorbisInfo
+        info: VorbisAudio
         comments: VorbisComments
         code := VorbisInspectComments(input, *info, *comments)
         if code != OK { print("%\n", ErrorText(code)); return code }
@@ -149,7 +151,7 @@ main :: (argc: s32, argv: **u8) -> s32 {
     bytes: Vec(u8)
     if !ReadFileInto(TextFromCString(argv[2]), *bytes) { print("input/output failed\n"); return IOFailure }
     input := VecSlice(bytes, 0, bytes.count)
-    if VorbisProbe(input) { return VorbisCommand(command, input, argc, argv) }
+    if VorbisRecognizes(input) { return VorbisCommand(command, input, argc, argv) }
     if !Magic(input, 0, "OggS") { return Mp3Command(command, input, argc, argv) }
     if command == "inspect" {
         info: Info

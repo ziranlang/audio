@@ -4,12 +4,13 @@
 // (never crashes) for truncated, corrupted, garbage and non-MP3 input.
 // Run from the package root.
 #import "types"
+#import "std/audio_types"
 #import "std/vec"
 #import "std/file"
 #import "std/byte_text_linux"
-#import "wav"
-#import "mpeg_audio"
-#import "mp3"
+#import "std/audio_wav"
+#import "std/audio_mpeg"
+#import "std/audio_mp3"
 #import "mp3_resample"
 #import "mpeg_fixture"
 

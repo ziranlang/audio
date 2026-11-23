@@ -1,7 +1,8 @@
 #import "types"
+#import "std/audio_types"
 #import "opus"
 #import "resample"
-#import "vorbis"
+#import "std/vorbis_linux"
 #program_export
 Codec :: () -> s32 {
     encoder: Encoder

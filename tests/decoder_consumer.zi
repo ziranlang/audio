@@ -1,5 +1,7 @@
-Types :: #import "audio/types"
+Types :: #import "std/audio_types"
 Opus :: #import "audio/opus"
+Mixer :: #import "std/audio"
+#import "audio/decode_opus"
 #import "std/vec"
 #import "std/file"
 #import "std/byte_text_linux"
@@ -10,6 +12,23 @@ main :: (argc: s32, argv: **u8) -> s32 {
     if !ReadFileInto(TextFromCString(argv[1]), *bytes) { return 2 }
     pcm: Types.PCM
     if Opus.Decode(VecSlice(bytes, 0, bytes.count), 4800, *pcm) != Types.OK || pcm.samples.count != 4800 { return 3 }
+    whole := Mixer.AudioLoad(TextFromBytes(bytes[:]), false)
+    stream := Mixer.AudioLoad(TextFromBytes(bytes[:]), true)
+    if whole.slot < 0 || stream.slot < 0 { return 4 }
+    defer { Mixer.AudioUnload(whole); Mixer.AudioUnload(stream) }
+    if !Mixer.AudioPlay(stream) { return 5 }
+    mixed: [2048]float32
+    Mixer.AudioRender(mixed[:], 1024)
+    for frame: 0..1023 {
+        if mixed[frame * 2] != pcm.samples[frame] || mixed[frame * 2 + 1] != pcm.samples[frame] { return 6 }
+    }
+    if Mixer.AudioSeek(stream, .01) { return 7 }
+    Mixer.AudioStop(stream)
+    if !Mixer.AudioSeek(whole, .01) || !Mixer.AudioPlay(whole) { return 8 }
+    Mixer.AudioRender(mixed[:], 1024)
+    // Play starts a stopped clip at its beginning; seek while paused/playing
+    // is covered by the core mixer suite. Here both decoder registrations run.
+    if mixed[0] != pcm.samples[0] { return 9 }
     print("decoder-only manifest consumer without samplerate passed\n")
     return 0
 }

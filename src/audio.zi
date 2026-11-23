@@ -1,14 +1,16 @@
 #import "types"
+#import "std/audio_types"
 #import "std/vec"
 #import "opus"
 #import "pipeline"
-#import "ogg"
-#import "wav"
+#import "ogg_opus"
+#import "std/ogg"
+#import "std/audio_wav"
 #import "resample"
-#import "mpeg_audio"
-#import "mp3"
-#import "ogg_vorbis"
-#import "vorbis"
+#import "std/audio_mpeg"
+#import "std/audio_mp3"
+#import "std/vorbis"
+#import "std/vorbis_linux"
 #import "std/file"
 #import "std/byte_text_linux"
 #import "std/file_tree_linux"
@@ -26,7 +28,7 @@ Help :: () {
     print("         --application audio|voice|lowdelay --complexity 0..10\n")
     print("         --frame-ms 5|10|20|40|60\n")
     print("Formats are detected from content: Ogg Vorbis, Ogg Opus, RIFF WAV, else MPEG audio (MP3; MPEG-1/2/2.5 Layers I-III).\n")
-    print("Native C: libopus, stb_vorbis, dr_mp3 and libsamplerate best sinc. Whole-file input cap 256 MiB; PCM cap 10 min at 48 kHz.\n")
+    print("Native C: libopus, libvorbisfile, dr_mp3 and libsamplerate best sinc. Whole-file input cap 256 MiB; PCM cap 10 min at 48 kHz.\n")
 }
 // Stage beside the destination; failures leave an existing destination intact.
 // A pre-existing .audio-part file causes an explicit error, never deletion.
@@ -95,10 +97,10 @@ main :: (argc: s32, argv: **u8) -> s32 {
     defer { unused UnmapFile(input) }
     if input.length > MaxBytes { print("audio limit exceeded\n"); return LimitExceeded }
     bytes := MappedBytes(input)
-    is_vorbis := VorbisProbe(bytes)
+    is_vorbis := VorbisRecognizes(bytes)
     is_ogg := Magic(bytes, 0, "OggS") && !is_vorbis
     if inspecting && is_vorbis {
-        info: VorbisInfo
+        info: VorbisAudio
         comments: VorbisComments
         code := VorbisInspectComments(bytes, *info, *comments)
         if code != OK { print("%\n", ErrorText(code)); return code }
@@ -123,7 +125,7 @@ main :: (argc: s32, argv: **u8) -> s32 {
     pcm: PCM
     code: s32
     if Magic(bytes, 0, "RIFF") && command != "decode" { code = WavDecode(bytes, MaxFrames, *pcm) }
-    else if command != "encode" && is_vorbis { code = VorbisDecode(bytes, MaxFrames, *pcm) }
+    else if command != "encode" && is_vorbis { code = VorbisDecodeFloat(bytes, MaxFrames, *pcm) }
     else if command != "encode" && is_ogg { code = Decode(bytes, MaxFrames, *pcm) }
     else if command != "encode" { code = Mp3Decode(bytes, MaxFrames, *pcm) }
     else { code = Unsupported }

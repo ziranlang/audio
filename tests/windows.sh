@@ -1,5 +1,5 @@
 #!/bin/sh
-# Windows x86_64 MinGW build of the pinned libopus/libsamplerate/dr_libs/stb
+# Windows x86_64 MinGW build of the pinned libopus/libsamplerate and core MP3/Vorbis
 # sources and two codec programs, run under Wine and compared with the Linux
 # CLI on the `make test` Opus fixtures and the committed MP3 and Vorbis
 # fixtures.
@@ -36,13 +36,13 @@ samplerate=$("$ZIRAN" pkg path libsamplerate --offline)
 "$CMAKE" -S native -B "$out/native" -DCMAKE_SYSTEM_NAME=Windows -DCMAKE_SYSTEM_PROCESSOR=AMD64 \
     -DCMAKE_C_COMPILER="$(command -v "$windows_cc")" -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
     -DCMAKE_BUILD_TYPE=Release -DOPUS_DIR="$opus" -DSAMPLERATE_DIR="$samplerate" \
-    -DDR_LIBS_DIR="$("$ZIRAN" pkg path dr_libs --offline)" -DSTB_DIR="$("$ZIRAN" pkg path stb --offline)" >"$out/cmake.log" 2>&1 &&
+    -DZIRAN_STDLIB="$("$ZIRAN" pkg path ziran --offline)/std" -DAUDIO_CORE_VORBIS=ON >"$out/cmake.log" 2>&1 &&
     "$CMAKE" --build "$out/native" --parallel 2 >>"$out/cmake.log" 2>&1 || { tail -n 40 "$out/cmake.log" >&2; exit 1; }
 libopus=$out/native/libopus/libopus.a
 libsamplerate=$out/native/libsamplerate/src/libsamplerate.a
 libmp3=$out/native/libziran_mp3.a
-libvorbis=$out/native/libziran_vorbis.a
-test -f "$libopus" && test -f "$libsamplerate" && test -f "$libmp3" && test -f "$libvorbis"
+libvorbis="$out/native/libvorbisfile.a $out/native/libvorbis.a $out/native/libogg.a"
+test -f "$libopus" && test -f "$libsamplerate" && test -f "$libmp3" && test -f "$out/native/libvorbisfile.a"
 
 # Nix splits mcfgthread's static runtime from its GCC wrapper; follow only
 # this compiler's declared inputs. Distribution MinGW needs no extra path.
@@ -77,7 +77,13 @@ for program in decode encode; do
         echo "windows_$program.exe imports a non-system DLL" >&2; exit 1
     fi
 done
-printf 'windows: libopus, libsamplerate, libziran_mp3, libziran_vorbis and codec programs built with %s\n' "$("$windows_cc" -dumpversion)"
+# Compare every mirrored field offset and record size with official Xiph headers.
+cp "$ziran_root/tests/fixtures/vorbis/client.zi.in" "$out/layout.zi"
+cp "$ziran_root/tests/fixtures/vorbis/layout.c.in" "$out/layout.c"
+"$ZIRAN" build --target=c --no-main --target-os windows --target-cpu x64 --define _WIN32 --define __x86_64__ --root "$out" -o "$out/layout-c" "$out/layout.zi"
+"$windows_cc" "$@" -O2 -I"$out/layout-c" -I"$ziran_root/include" "$out/layout-c"/*.c $libvorbis -lm -static -static-libgcc -o "$out/run/layout-mirror.exe"
+"$windows_cc" "$@" -I"$out/native/_deps/ziran_core_vorbis-src/include" -I"$out/native/_deps/ziran_core_ogg-src/include" -I"$out/native/_deps/ziran_core_ogg-build/include" "$out/layout.c" -static -static-libgcc -o "$out/run/layout-xiph.exe"
+printf 'windows: libopus, libsamplerate, libziran_mp3, core Vorbis and codec programs built with %s\n' "$("$windows_cc" -dumpversion)"
 
 cd "$out/run"
 for name in $decoded $rejected; do cp "$root/$fixtures/$name.opus" .; done
@@ -136,6 +142,10 @@ xvfb-run -a -n 400 -s '-screen 0 640x480x24' env -u TMPDIR HOME="$root/$out/home
     trap cleanup EXIT
     trap "exit 129" HUP; trap "exit 130" INT; trap "exit 143" TERM
     WINEDEBUG=err+all "$1" wineboot.exe --init 2>wineboot.log || { cat wineboot.log >&2; echo "Wine bootstrap failed" >&2; exit 1; }
+    "$1" layout-mirror.exe sizes mirror-layout.txt
+    "$1" layout-xiph.exe >xiph-layout.txt
+    tr -d "\r" <xiph-layout.txt >xiph-layout-normalized.txt
+    cmp mirror-layout.txt xiph-layout-normalized.txt
     while read -r line; do "$1" windows_decode.exe $line; done <decode.commands >windows.log
     "$1" windows_encode.exe encode voice.wav windows-voice.opus >>windows.log
     "$1" windows_encode.exe resample voice.wav 16000 >resample.log

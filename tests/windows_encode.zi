@@ -3,9 +3,10 @@
 // voice, wide-band cap, constrained VBR); `resample IN.wav RATE` prints the
 // status so the test can assert the documented Windows sinc boundary.
 #import "types"
+#import "std/audio_types"
 #import "pipeline"
 #import "resample"
-#import "wav"
+#import "std/audio_wav"
 #import "std/vec"
 #import "std/file"
 #import "std/byte_text_linux"

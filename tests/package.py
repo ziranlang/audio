@@ -17,10 +17,9 @@ def run(*args, cwd=root):
 # Exercise the package's actual entry and native link metadata. Publish the
 # completed project output at the same stable CLI path used by the other tests.
 run(ziran, 'lock', '--offline')
-# The manifest links libziran_mp3.a, which `make test` built from dr_libs.
+# The manifest links the core archives built by `make test`.
 env['LDFLAGS'] = '-L'+str(root/'build/native/linux')
 run(ziran, 'build', '--offline')
-env.pop('LDFLAGS')
 (root/'build/bin').mkdir(parents=True, exist_ok=True)
 (root/'build/audio').replace(root/'build/bin/audio')
 run(root/'build/bin/audio', '--help')

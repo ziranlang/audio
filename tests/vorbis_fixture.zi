@@ -2,11 +2,13 @@
 // identification and comment headers, a setup header holding filler bits and
 // a two-mode table (mode 0 short blocks, mode 1 long), and one-byte audio
 // packets that name a mode, one packet per page. No decoder accepts the
-// setup header; the streams exercise audio/ogg_vorbis's container, header,
+// setup header; the streams exercise std/vorbis's container, header,
 // block-size and granule checks.
 #import "types"
+#import "std/audio_types"
 #import "std/vec"
-#import "ogg"
+#import "ogg_opus"
+#import "std/ogg"
 
 #scope_file
 Bits :: struct { bytes: Vec(u8); count: s64; }

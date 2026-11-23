@@ -1,7 +1,8 @@
-Types :: #import "audio/types"
+Types :: #import "std/audio_types"
+OpusTypes :: #import "audio/types"
 Opus :: #import "audio/opus"
 Pipeline :: #import "audio/pipeline"
-Ogg :: #import "audio/ogg"
+Ogg :: #import "audio/ogg_opus"
 #import "std/vec"
 #import "std/file"
 #program_export
@@ -10,10 +11,10 @@ main :: () -> s32 {
     pcm.rate = 44100; pcm.channels = 1
     if !VecResize(pcm.samples, 4410) { return 1 }
     bytes: Vec(u8)
-    options := Types.DefaultOptions()
-    options.bandwidth = Types.Bandwidth.Wide
+    options := OpusTypes.DefaultOptions()
+    options.bandwidth = OpusTypes.Bandwidth.Wide
     if Pipeline.Encode(*pcm, options, *bytes) != Types.OK { return 2 }
-    info: Types.Info
+    info: OpusTypes.Info
     if Ogg.Inspect(VecSlice(bytes, 0, bytes.count), *info) != Types.OK || info.frames != 4800 { return 3 }
     decoded: Types.PCM
     if Opus.Decode(VecSlice(bytes, 0, bytes.count), 4800, *decoded) != Types.OK || decoded.samples.count != 4800 { return 4 }

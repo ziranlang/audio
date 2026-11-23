@@ -1,4 +1,4 @@
-#import "types"
+#import "std/audio_types"
 #import "std/vec"
 #scope_file
 samplerate :: #system_library "samplerate";
