@@ -4,7 +4,7 @@
     {
       "commit": "c96f5e3de9c4488f4e6c97f59f5245f22fda22f7",
       "dependencies": {},
-      "id": "p0dd67588478f9a3e",
+      "id": "src_github_com_libsndfile_libsamplerate_c96f5e3de9c4",
       "name": "libsamplerate",
       "ref": "c96f5e3de9c4488f4e6c97f59f5245f22fda22f7",
       "source": true,
@@ -13,7 +13,7 @@
     {
       "commit": "ddbe48383984d56acd9e1ab6a090c54ca6b735a6",
       "dependencies": {},
-      "id": "pe1fe9bbe80bf1d6d",
+      "id": "src_github_com_xiph_opus_ddbe48383984",
       "name": "libopus",
       "ref": "ddbe48383984d56acd9e1ab6a090c54ca6b735a6",
       "source": true,
@@ -21,12 +21,12 @@
     }
   ],
   "root": {
-    "dependencies": {"libopus": "pe1fe9bbe80bf1d6d", "libsamplerate": "p0dd67588478f9a3e"},
+    "dependencies": {"libopus": "src_github_com_xiph_opus_ddbe48383984", "libsamplerate": "src_github_com_libsndfile_libsamplerate_c96f5e3de9c4"},
     "dependency_refs": {"libopus": "ddbe48383984d56acd9e1ab6a090c54ca6b735a6", "libsamplerate": "c96f5e3de9c4488f4e6c97f59f5245f22fda22f7"},
     "name": "audio"
   },
   "toolchain": {
-    "commit": "5db3d3c39425d5dfe4bfe4a84e6f6e2e5a810ad0",
+    "commit": "0affd948205733bc370b6802f9730d8edf5e1e35",
     "ref": "5db3d3c39425d5dfe4bfe4a84e6f6e2e5a810ad0",
     "url": "https://git.waozi.xyz/ziranlang/ziran.git"
   }
